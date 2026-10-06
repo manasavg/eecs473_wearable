@@ -360,7 +360,7 @@ function LiveLinkCard({
         Check in
       </Button>
       <p className="mt-2 text-xs text-muted-foreground">
-        Writes a check-in to the beacon. The sketch prints received on the serial monitor.
+        Writes a check-in to Leader_Device on the characteristic already in the sketch.
       </p>
     </section>
   );

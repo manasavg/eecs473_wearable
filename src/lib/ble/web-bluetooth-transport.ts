@@ -74,11 +74,16 @@ export class WebBluetoothTransport implements BleTransport {
       }
       device = permitted;
     } else {
-      // Filters are OR'd. The sketch advertises the name Leader_Device and
-      // puts LIVE_SERVICE_UUID in the advertising packet.
       try {
         device = await navigator.bluetooth.requestDevice({
-          filters: [{ namePrefix: prefix }, { services: [LIVE_SERVICE_UUID] }],
+          // Filters are OR'd. The original sketch name is Leader_Device even
+          // when a saved prefix differs, and even when the service UUID is
+          // only in the scan response.
+          filters: [
+            { namePrefix: "Leader_Device" },
+            ...(prefix === "Leader_Device" ? [] : [{ namePrefix: prefix }]),
+            { services: [LIVE_SERVICE_UUID] },
+          ],
           optionalServices: [LIVE_SERVICE_UUID],
         });
       } catch (error) {

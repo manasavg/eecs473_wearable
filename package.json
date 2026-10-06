@@ -8,7 +8,8 @@
     "start": "next start -p 4317",
     "lint": "eslint",
     "build:ios": "CAPACITOR=1 next build",
-    "cap:sync": "npm run build:ios && npx cap sync ios",
+    "postinstall": "patch-package",
+    "cap:sync": "npm run build:ios && npx patch-package && npx cap sync ios",
     "test": "node --import tsx --test src/lib/ble/protocol.test.ts src/lib/ble/ranging.test.ts src/lib/ble/live-link.test.ts src/lib/ble/app-client.test.ts src/lib/ble/native-transport.test.ts"
   },
   "dependencies": {
@@ -37,6 +38,7 @@
     "@types/web-bluetooth": "^0.0.21",
     "eslint": "^9",
     "eslint-config-next": "15.5.27",
+    "patch-package": "^8.0.1",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5"

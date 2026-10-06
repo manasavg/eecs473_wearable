@@ -20,13 +20,6 @@ class MyServerCallbacks : public BLEServerCallbacks {
   }
 };
 
-class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *pCharacteristic) {
-    (void)pCharacteristic;
-    Serial.println("received");
-  }
-};
-
 #define SERVICE_UUID        "2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1"
 #define CHARACTERISTIC_UUID "017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8"
 
@@ -40,15 +33,12 @@ void setup() {
     pService->createCharacteristic(CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE| BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_INDICATE);
 
   pCharacteristic->setValue("Data successfully transmitted");
-  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
   pCharacteristic->addDescriptor(new BLE2902());
   pService->start();
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
   pAdvertising->setScanResponse(true);
-  // Do not call setMinPreferred(). It adds bytes that push this 128-bit
-  // service UUID out of the advertising packet, and the phone then cannot
-  // see Leader_Device.
+  pAdvertising->setMinPreferred(0x06);
   BLEDevice::startAdvertising();
   Serial.println("Data sent to phone");
 }

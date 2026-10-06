@@ -1,0 +1,60 @@
+diff --git a/node_modules/@capacitor-community/bluetooth-le/ios/Sources/BluetoothLe/DeviceManager.swift b/node_modules/@capacitor-community/bluetooth-le/ios/Sources/BluetoothLe/DeviceManager.swift
+index f302339..a847b1f 100644
+--- a/node_modules/@capacitor-community/bluetooth-le/ios/Sources/BluetoothLe/DeviceManager.swift
++++ b/node_modules/@capacitor-community/bluetooth-le/ios/Sources/BluetoothLe/DeviceManager.swift
+@@ -121,8 +121,11 @@ class DeviceManager: NSObject, CBCentralManagerDelegate {
+                 self.stopScanWorkItem = workItem
+                 DispatchQueue.main.asyncAfter(deadline: .now() + scanDuration, execute: workItem)
+             }
++            // An empty list must scan for every device. CoreBluetooth treats [] as
++            // "match nothing", which hides a beacon that advertises by name.
++            let servicesToScan: [CBUUID]? = serviceUUIDs.isEmpty ? nil : serviceUUIDs
+             self.centralManager.scanForPeripherals(
+-                withServices: serviceUUIDs,
++                withServices: servicesToScan,
+                 options: [CBCentralManagerScanOptionAllowDuplicatesKey: allowDuplicates]
+             )
+ 
+@@ -175,8 +178,13 @@ class DeviceManager: NSObject, CBCentralManagerDelegate {
+             return
+         }
+ 
+-        guard self.passesNameFilter(peripheralName: peripheral.name) else { return }
+-        guard self.passesNamePrefixFilter(peripheralName: peripheral.name) else { return }
++        // iOS often leaves peripheral.name nil until after bonding. The sketch
++        // puts "Leader_Device" in the advertising packet as the local name.
++        let advertisedName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
++        let resolvedName = peripheral.name ?? advertisedName
++
++        guard self.passesNameFilter(peripheralName: resolvedName) else { return }
++        guard self.passesNamePrefixFilter(peripheralName: resolvedName) else { return }
+         guard ScanFilterUtils.passesManufacturerDataFilter(advertisementData, filters: self.manufacturerDataFilters) else { return }
+         guard ScanFilterUtils.passesServiceDataFilter(advertisementData, filters: self.serviceDataFilters) else { return }
+ 
+@@ -185,7 +193,7 @@ class DeviceManager: NSObject, CBCentralManagerDelegate {
+         self.discoveredPeripherals[deviceId] = peripheral
+ 
+         if isNew || self.allowDuplicates {
+-            log("New device found: ", peripheral.name ?? "Unknown")
++            log("New device found: ", resolvedName ?? "Unknown")
+ 
+             switch deviceListMode {
+             case .none:
+@@ -194,7 +202,7 @@ class DeviceManager: NSObject, CBCentralManagerDelegate {
+                 }
+             case .alert:
+                 DispatchQueue.main.async { [weak self] in
+-                    self?.alertController?.addAction(UIAlertAction(title: peripheral.name ?? "Unknown", style: UIAlertAction.Style.default, handler: { (_) in
++                    self?.alertController?.addAction(UIAlertAction(title: resolvedName ?? "Unknown", style: UIAlertAction.Style.default, handler: { (_) in
+                         log("Selected device")
+                         self?.stopScan()
+                         self?.resolve("startScanning", deviceId)
+@@ -202,7 +210,7 @@ class DeviceManager: NSObject, CBCentralManagerDelegate {
+                 }
+             case .list:
+                 DispatchQueue.main.async { [weak self] in
+-                    self?.deviceListView?.addItem(peripheral.name ?? "Unknown", action: {
++                    self?.deviceListView?.addItem(resolvedName ?? "Unknown", action: {
+                         log("Selected device")
+                         self?.stopScan()
+                         self?.resolve("startScanning", deviceId)
