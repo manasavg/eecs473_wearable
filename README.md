@@ -96,7 +96,7 @@ In Xcode, select your iPhone, trust the developer certificate, and run.
 the dashboard is the same `uint32` the ESP32 notifies every 500 ms.
 
 That scan matches the original sketch, including `setMinPreferred(0x06)`.
-`npm install` applies a small Core Bluetooth patch so iOS can find the
+`npm install` updates the iOS Bluetooth plugin so the phone can find the
 advertised name when the 128-bit service UUID does not fit in the same packet.
 
 `npm run dev` is still the browser app. `npm run cap:sync` rebuilds the
