@@ -347,7 +347,7 @@ function LiveLinkCard({
         {link?.counter == null ? "—" : link.counter.toLocaleString()}
       </p>
       <p className="mt-1 text-sm text-muted-foreground">
-        Counter from the beacon. The sketch adds one and notifies every half second.
+        Counter from the beacon. The sketch adds one and notifies one byte every 3 seconds.
         {link && link.packetCount > 0
           ? ` ${link.packetCount} packet${link.packetCount === 1 ? "" : "s"} on this link.`
           : ""}
@@ -360,7 +360,7 @@ function LiveLinkCard({
         Check in
       </Button>
       <p className="mt-2 text-xs text-muted-foreground">
-        Writes a check-in to Leader_Device on the characteristic already in the sketch.
+        Writes a check-in to the RX characteristic. The sketch prints Received Value on the serial monitor.
       </p>
     </section>
   );

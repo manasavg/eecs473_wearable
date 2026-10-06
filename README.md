@@ -8,7 +8,7 @@ network.
 
 The radios are not required to practice. **Practice with a demo group** stands in
 for wristbands. **Connect the beacon** opens the ESP32 sketch already running:
-it advertises `Leader_Device` and notifies a counter every half second.
+it advertises the name `Leader_Device` and notifies a one-byte counter every 3 seconds.
 
 ## Run it
 
@@ -93,9 +93,13 @@ npx cap open ios
 
 In Xcode, select your iPhone, trust the developer certificate, and run.
 **Connect the beacon** shows a list. Pick `Leader_Device`. The counter on
-the dashboard is the same `uint32` the ESP32 notifies every 500 ms.
+the dashboard is the `uint8` the ESP32 notifies every 3 seconds.
 
-The phone scans for service `2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1` from the original sketch. It does not also filter on the name, because iOS often leaves that blank and the list would stay empty.
+The sketch does not put the service UUID in the advertising packet. The phone
+scans for the name `Leader_Device`, then opens service
+`2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1`. Notify is
+`812f1d0a-031f-4bf3-8c40-0c8f27971552`. Check in writes
+`017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8`, and the sketch prints `Received Value`.
 
 `npm run dev` is still the browser app. `npm run cap:sync` rebuilds the
 static site and copies it into the Xcode project.

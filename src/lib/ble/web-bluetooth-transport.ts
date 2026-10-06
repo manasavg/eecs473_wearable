@@ -5,11 +5,12 @@ import type { AppCommand } from "./types";
 import { Status } from "./types";
 import {
   ALERT_UUID,
-  COMMAND_UUID,
   FOLLOWER_STATUS_UUID,
   LEADER_STATUS_UUID,
-  LIVE_DATA_UUID,
+  BLE_NAME_PREFIX,
+  LIVE_RX_UUID,
   LIVE_SERVICE_UUID,
+  LIVE_TX_UUID,
   getBleNamePrefix,
 } from "./uuids";
 
@@ -76,13 +77,11 @@ export class WebBluetoothTransport implements BleTransport {
     } else {
       try {
         device = await navigator.bluetooth.requestDevice({
-          // Filters are OR'd. The original sketch name is Leader_Device even
-          // when a saved prefix differs, and even when the service UUID is
-          // only in the scan response.
+          // The sketch advertises the name only. It does not call addServiceUUID,
+          // so a service filter by itself would hide Leader_Device.
           filters: [
-            { namePrefix: "Leader_Device" },
-            ...(prefix === "Leader_Device" ? [] : [{ namePrefix: prefix }]),
-            { services: [LIVE_SERVICE_UUID] },
+            { namePrefix: BLE_NAME_PREFIX },
+            ...(prefix === BLE_NAME_PREFIX ? [] : [{ namePrefix: prefix }]),
           ],
           optionalServices: [LIVE_SERVICE_UUID],
         });
@@ -162,28 +161,15 @@ export class WebBluetoothTransport implements BleTransport {
         );
       });
 
-      const data = await characteristic(service, LIVE_DATA_UUID, "data");
-      // The flashed sketch writes on this same characteristic. A later sketch
-      // can add COMMAND_UUID; prefer that so a check-in does not overwrite the counter.
-      const command = await optionalCharacteristic(service, COMMAND_UUID);
-      this.command =
-        command && (command.properties.write || command.properties.writeWithoutResponse)
-          ? command
-          : data;
+      const tx = await characteristic(service, LIVE_TX_UUID, "notify");
+      const rx = await characteristic(service, LIVE_RX_UUID, "write");
+      this.command = rx;
 
       // TODO(ble): Pairing is done by the phone OS, not by this file.
       // The current sketch does not require a bond. Before a hike, require
       // LE Secure Connections so a nearby phone cannot write this characteristic.
 
-      await this.listen(data, (bytes) => this.emitSample(bytes));
-      if (data.properties.read) {
-        try {
-          const value = await data.readValue();
-          this.emitSample(viewToBytes(value));
-        } catch {
-          // The notify subscription still delivers the next counter.
-        }
-      }
+      await this.listen(tx, (bytes) => this.emitSample(bytes));
 
       // TODO(ble): Present only after the ESP32 adds them to LIVE_SERVICE_UUID.
       await this.listenIfPresent(service, LEADER_STATUS_UUID, (bytes) => {

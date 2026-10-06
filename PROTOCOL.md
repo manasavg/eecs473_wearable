@@ -11,16 +11,16 @@ The app connects to it. Do not change these to open the link:
 
 | | |
 | --- | --- |
-| Advertised name | `Leader_Device` |
+| Advertised name | `Leader_Device` (the service UUID is not in the advertising packet) |
 | Service | `2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1` |
-| Characteristic | `017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8` (read, write, notify, indicate) |
+| TX notify | `812f1d0a-031f-4bf3-8c40-0c8f27971552` |
+| RX write | `017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8` |
 
-`setup()` stores the text `Data successfully transmitted`. While the phone is
-connected, `loop()` notifies a little-endian `uint32` every 500 ms and increments it.
-The dashboard shows that counter. A 4-byte notification is the counter, not an alert.
+While the phone is connected, `loop()` notifies one `uint8` on TX every 3 seconds
+and increments it. The dashboard shows that counter. A 1-byte notification is
+that counter. A 4-byte notification is still read as a little-endian `uint32`.
 
-Check-ins and the separation line are written to that same characteristic until a
-dedicated command characteristic exists. The current `loop()` does not read them.
+Check-ins are written to RX. `onWrite` prints `Received Value` and the bytes.
 
 ## Wristband packets (next firmware)
 

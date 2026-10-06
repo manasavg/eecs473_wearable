@@ -3,25 +3,31 @@
  * The phone is the central. That sketch is the peripheral.
  *
  *   BLEDevice::init("Leader_Device");
- *   SERVICE_UUID        2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1
- *   CHARACTERISTIC_UUID 017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8
+ *   SERVICE_UUID           2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1
+ *   CHARACTERISTIC_UUID_RX 017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8  write
+ *   CHARACTERISTIC_UUID_TX 812f1d0a-031f-4bf3-8c40-0c8f27971552  notify
  *
- * The characteristic is read, write, notify, and indicate. setup() stores
- * "Data successfully transmitted". loop() notifies a little-endian uint32
- * every 500 ms while the phone is connected.
+ * setup() does not add the service UUID to the advertising packet. The phone
+ * finds the name Leader_Device, then opens this service. loop() notifies one
+ * uint8 on TX every 3 seconds. onWrite on RX prints the bytes.
  *
  * Appendix C characteristic UUIDs below are not on that sketch. The transport
  * subscribes to them only when the ESP32 adds them to this same service.
- * Wristband bytes can also arrive on LIVE_DATA_UUID; see live-link.ts.
  */
 
 export const BLE_NAME_PREFIX = "Leader_Device";
 
-/** Service advertised by the flashed sketch. */
+/** Service created by the flashed sketch. It is not in the advertising packet. */
 export const LIVE_SERVICE_UUID = "2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1";
 
-/** The one characteristic the flashed sketch exposes. */
-export const LIVE_DATA_UUID = "017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8";
+/** RX. PROPERTY_WRITE. The sketch prints these bytes from onWrite. */
+export const LIVE_RX_UUID = "017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8";
+
+/** TX. PROPERTY_NOTIFY. One uint8, incremented every 3 seconds. */
+export const LIVE_TX_UUID = "812f1d0a-031f-4bf3-8c40-0c8f27971552";
+
+/** Older name for the write characteristic. */
+export const LIVE_DATA_UUID = LIVE_RX_UUID;
 
 /** Same service the chooser and GATT browser open. */
 export const EXCURSION_SERVICE_UUID = LIVE_SERVICE_UUID;

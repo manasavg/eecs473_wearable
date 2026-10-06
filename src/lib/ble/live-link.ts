@@ -9,18 +9,17 @@ import type { BleEvent } from "./transport";
 import type { FollowerInfo } from "./types";
 
 /**
- * Bytes from the ESP32 sketch that is already paired to the phone.
+ * Bytes from the ESP32 sketch in firmware/leader_device/leader_device.ino.
  *
- * setup() stores the text "Data successfully transmitted".
- * loop(), while connected, notifies a little-endian uint32 every 500 ms:
+ * The TX characteristic notifies one uint8 every 3 seconds:
  *
- *   pCharacteristic->setValue((uint8_t *)&value, 4);
- *   pCharacteristic->notify();
- *   value++;
+ *   pTxCharacteristic->setValue(&txValue, 1);
+ *   pTxCharacteristic->notify();
+ *   txValue++;
  *
- * A 4-byte notification is that counter. It is not an alert packet, even
- * though both are 4 bytes. Alerts stay on ALERT_UUID once that characteristic
- * exists.
+ * A 1-byte notification is that counter. A 4-byte notification is still read
+ * as a little-endian uint32 so an older counter does not look like an alert.
+ * Alerts stay on ALERT_UUID once that characteristic exists.
  *
  * A 9-byte version-1 notification is a follower, so the same characteristic
  * can start carrying wristbands without another app change.
@@ -43,6 +42,10 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
     follower: null,
     leaderBattery: null,
   };
+
+  if (bytes.length === 1) {
+    return { ...base, counter: bytes[0] };
+  }
 
   if (bytes.length === 4) {
     return { ...base, counter: uint32le(bytes) };

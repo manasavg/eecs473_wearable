@@ -4,13 +4,15 @@ import { createTransport } from "./create-transport.ts";
 import { encodeCommand } from "./protocol.ts";
 import { NativeBleTransport, rememberedNativeBeaconName, type NativeCentral } from "./native-transport.ts";
 import { CmdType } from "./types.ts";
-import { LIVE_DATA_UUID, LIVE_SERVICE_UUID } from "./uuids.ts";
+import { BLE_NAME_PREFIX, LIVE_RX_UUID, LIVE_SERVICE_UUID, LIVE_TX_UUID } from "./uuids.ts";
 import { WebBluetoothTransport } from "./web-bluetooth-transport.ts";
 import type { BleEvent } from "./transport.ts";
 
 class FakeCentral implements NativeCentral {
   requestCount = 0;
   requestOptions: { services?: string[]; namePrefix?: string } | undefined;
+  subscribed: string[] = [];
+  writtenTo: string[] = [];
   connectOptions: { timeout?: number; skipDescriptorDiscovery?: boolean } | undefined;
   readonly writes: Uint8Array[] = [];
   private notify: ((value: DataView) => void) | null = null;
@@ -42,13 +44,23 @@ class FakeCentral implements NativeCentral {
         uuid: LIVE_SERVICE_UUID.toUpperCase(),
         characteristics: [
           {
-            uuid: LIVE_DATA_UUID.toUpperCase(),
+            uuid: LIVE_TX_UUID.toUpperCase(),
             properties: {
-              read: true,
-              write: true,
+              read: false,
+              write: false,
               writeWithoutResponse: false,
               notify: true,
-              indicate: true,
+              indicate: false,
+            },
+          },
+          {
+            uuid: LIVE_RX_UUID.toUpperCase(),
+            properties: {
+              read: false,
+              write: true,
+              writeWithoutResponse: false,
+              notify: false,
+              indicate: false,
             },
           },
         ],
@@ -56,19 +68,25 @@ class FakeCentral implements NativeCentral {
     ];
   }
   async read(): Promise<DataView> {
-    const bytes = new TextEncoder().encode("Data successfully transmitted");
-    return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return new DataView(new Uint8Array([0]).buffer);
   }
-  async write(_deviceId: string, _service: string, _characteristic: string, value: DataView): Promise<void> {
+  async write(
+    _deviceId: string,
+    _service: string,
+    characteristic: string,
+    value: DataView,
+  ): Promise<void> {
+    this.writtenTo.push(characteristic);
     this.writes.push(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
   }
   async writeWithoutResponse(): Promise<void> {}
   async startNotifications(
     _deviceId: string,
     _service: string,
-    _characteristic: string,
+    characteristic: string,
     callback: (value: DataView) => void,
   ): Promise<void> {
+    this.subscribed.push(characteristic);
     this.notify = callback;
   }
   async stopNotifications(): Promise<void> {}
@@ -95,22 +113,18 @@ describe("NativeBleTransport", () => {
     const events = eventsOf(link);
     await link.connect();
     assert.equal(central.requestCount, 1);
-    assert.deepEqual(central.requestOptions?.services, [LIVE_SERVICE_UUID]);
-    assert.equal(central.requestOptions?.namePrefix, undefined);
+    assert.equal(central.requestOptions?.services, undefined);
+    assert.equal(central.requestOptions?.namePrefix, BLE_NAME_PREFIX);
+    assert.deepEqual(central.subscribed, [LIVE_TX_UUID]);
     assert.equal(central.connectOptions?.skipDescriptorDiscovery, true);
     assert.equal(central.connectOptions?.timeout, 20000);
     assert.equal(events.some((event) => event.type === "connected" && event.deviceName === "Leader_Device"), true);
-    assert.equal(
-      events.some((event) => event.type === "live" && event.text === "Data successfully transmitted"),
-      true,
-    );
-    const counter = new Uint8Array(4);
-    new DataView(counter.buffer).setUint32(0, 5, true);
-    central.push(counter);
+    central.push(new Uint8Array([5]));
     assert.equal(events.some((event) => event.type === "live" && event.counter === 5), true);
     assert.equal(rememberedNativeBeaconName(), "Leader_Device");
 
     await link.writeCommand({ type: CmdType.CHECK_IN, targetId: 2, thresholdMeters: 0 });
+    assert.deepEqual(central.writtenTo, [LIVE_RX_UUID]);
     assert.deepEqual([...central.writes[0]], [...encodeCommand({ type: CmdType.CHECK_IN, targetId: 2, thresholdMeters: 0 })]);
     await link.disconnect();
   });

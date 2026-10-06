@@ -18,8 +18,9 @@ import {
   COMMAND_UUID,
   FOLLOWER_STATUS_UUID,
   LEADER_STATUS_UUID,
-  LIVE_DATA_UUID,
+  LIVE_RX_UUID,
   LIVE_SERVICE_UUID,
+  LIVE_TX_UUID,
   getBleNamePrefix,
   setBleNamePrefix,
 } from "@/lib/ble/uuids";
@@ -76,12 +77,14 @@ export function LinkSheet({
           </Button>
 
           <dl className="space-y-2 font-mono text-[11px] leading-relaxed break-all">
-            <Uuid label="Service (on the ESP32)" value={LIVE_SERVICE_UUID} />
-            <Uuid label="Data (read, write, notify)" value={LIVE_DATA_UUID} />
+            <Uuid label="Service" value={LIVE_SERVICE_UUID} />
+            <Uuid label="TX notify, one byte every 3 s" value={LIVE_TX_UUID} />
+            <Uuid label="RX write, printed on serial" value={LIVE_RX_UUID} />
           </dl>
           <p className="text-xs text-muted-foreground">
-            That characteristic sends a 4-byte counter every half second. The text from setup is
-            “Data successfully transmitted”.
+            The sketch advertises the name Leader_Device and does not put the service UUID in
+            that packet. Notify is the TX characteristic. Check in writes the RX characteristic,
+            which prints Received Value.
           </p>
           <dl className="space-y-2 font-mono text-[11px] leading-relaxed break-all">
             <Uuid label="Leader, when added" value={LEADER_STATUS_UUID} />

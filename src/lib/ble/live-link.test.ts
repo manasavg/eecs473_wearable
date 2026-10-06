@@ -5,6 +5,14 @@ import { encodeFollower, encodeLeader } from "./protocol.ts";
 import { Status, type FollowerInfo } from "./types.ts";
 
 describe("parseLiveNotify", () => {
+  it("reads the one-byte counter the sketch notifies every 3 seconds", () => {
+    const sample = parseLiveNotify(new Uint8Array([7]));
+    assert.equal(sample.counter, 7);
+    assert.equal(sample.hex, "07");
+    assert.equal(sample.text, null);
+    assert.equal(sample.follower, null);
+  });
+
   it("reads the little-endian counter the sketch notifies every 500 ms", () => {
     const bytes = new Uint8Array(4);
     new DataView(bytes.buffer).setUint32(0, 42, true);

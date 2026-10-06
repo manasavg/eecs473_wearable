@@ -5,11 +5,12 @@ import type { BleEvent, BleTransport } from "./transport";
 import type { AppCommand } from "./types";
 import {
   ALERT_UUID,
-  COMMAND_UUID,
   FOLLOWER_STATUS_UUID,
   LEADER_STATUS_UUID,
-  LIVE_DATA_UUID,
+  BLE_NAME_PREFIX,
+  LIVE_RX_UUID,
   LIVE_SERVICE_UUID,
+  LIVE_TX_UUID,
 } from "./uuids";
 
 /**
@@ -184,10 +185,10 @@ export class NativeBleTransport implements BleTransport {
   }
 
   private async pickDevice(central: NativeCentral): Promise<NativeDevice> {
-    // Scan for the service in the original sketch. A name filter hides it:
-    // iOS often leaves the advertised name blank until after the first connection.
+    // This sketch calls getAdvertising()->start() without addServiceUUID, so
+    // the packet only carries the name from BLEDevice::init("Leader_Device").
     return central.requestDevice({
-      services: [LIVE_SERVICE_UUID],
+      namePrefix: BLE_NAME_PREFIX,
       optionalServices: [LIVE_SERVICE_UUID],
       displayMode: "list",
     });
@@ -228,31 +229,24 @@ export class NativeBleTransport implements BleTransport {
           "The phone is connected, but the beacon does not expose 2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1.",
         );
       }
-      const data = service.characteristics.find((item) => sameUuid(item.uuid, LIVE_DATA_UUID));
-      if (!data) {
+      const tx = service.characteristics.find((item) => sameUuid(item.uuid, LIVE_TX_UUID));
+      if (!tx) {
         throw new Error(
-          "Leader_Device is missing characteristic 017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8.",
+          "Leader_Device is missing the notify characteristic 812f1d0a-031f-4bf3-8c40-0c8f27971552.",
         );
       }
-      const command = service.characteristics.find((item) => sameUuid(item.uuid, COMMAND_UUID));
-      const writable =
-        command && (command.properties.write || command.properties.writeWithoutResponse)
-          ? command
-          : data;
+      const rx = service.characteristics.find((item) => sameUuid(item.uuid, LIVE_RX_UUID));
+      if (!rx) {
+        throw new Error(
+          "Leader_Device is missing the write characteristic 017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8.",
+        );
+      }
       this.writeTarget = {
-        uuid: sameUuid(writable.uuid, COMMAND_UUID) ? COMMAND_UUID : LIVE_DATA_UUID,
-        withoutResponse: writable.properties.writeWithoutResponse && !writable.properties.write,
+        uuid: LIVE_RX_UUID,
+        withoutResponse: rx.properties.writeWithoutResponse && !rx.properties.write,
       };
 
-      await this.subscribeChar(central, device.deviceId, LIVE_DATA_UUID);
-      if (data.properties.read) {
-        try {
-          const value = await central.read(device.deviceId, LIVE_SERVICE_UUID, LIVE_DATA_UUID);
-          this.onBytes(viewToBytes(value));
-        } catch {
-          /* the notify subscription still delivers the next counter */
-        }
-      }
+      await this.subscribeChar(central, device.deviceId, LIVE_TX_UUID);
       await this.subscribeIfPresent(central, device.deviceId, service, LEADER_STATUS_UUID);
       await this.subscribeIfPresent(central, device.deviceId, service, FOLLOWER_STATUS_UUID);
       await this.subscribeIfPresent(central, device.deviceId, service, ALERT_UUID);
