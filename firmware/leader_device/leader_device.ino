@@ -25,12 +25,6 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
     (void)pCharacteristic;
     Serial.println("received");
   }
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-  void onWrite(BLECharacteristic *pCharacteristic, esp_ble_gatts_cb_param_t *param) {
-    (void)param;
-    onWrite(pCharacteristic);
-  }
-#endif
 };
 
 #define SERVICE_UUID        "2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1"
@@ -52,7 +46,9 @@ void setup() {
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
   pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x06);
+  // Do not call setMinPreferred(). It adds bytes that push this 128-bit
+  // service UUID out of the advertising packet, and the phone then cannot
+  // see Leader_Device.
   BLEDevice::startAdvertising();
   Serial.println("Data sent to phone");
 }
