@@ -155,8 +155,13 @@ export function ExcursionApp() {
               onChange={app.setThreshold}
             />
 
-            {state.mode === "beacon" && state.liveLink && (
-              <LiveLinkCard link={state.liveLink} deviceName={state.deviceName} />
+            {state.mode === "beacon" && (state.liveLink || linked) && (
+              <LiveLinkCard
+                link={state.liveLink}
+                deviceName={state.deviceName}
+                linked={linked}
+                onCheckIn={() => void app.checkIn(BROADCAST_ID)}
+              />
             )}
 
             {state.connection === "scanning" && state.members.length === 0 ? (
@@ -323,20 +328,40 @@ function Gate({
   );
 }
 
-function LiveLinkCard({ link, deviceName }: { link: LiveLink; deviceName: string | null }) {
+function LiveLinkCard({
+  link,
+  deviceName,
+  linked,
+  onCheckIn,
+}: {
+  link: LiveLink | null;
+  deviceName: string | null;
+  linked: boolean;
+  onCheckIn: () => void;
+}) {
   return (
     <section className="rounded-3xl border bg-card px-5 py-5">
       <p className="text-[11px] tracking-[0.22em] text-muted-foreground uppercase">ESP32</p>
       <h2 className="font-display text-2xl">{deviceName || "Leader_Device"}</h2>
       <p className="mt-3 font-mono text-5xl text-pine tabular-nums">
-        {link.counter == null ? "—" : link.counter.toLocaleString()}
+        {link?.counter == null ? "—" : link.counter.toLocaleString()}
       </p>
       <p className="mt-1 text-sm text-muted-foreground">
         Counter from the beacon. The sketch adds one and notifies every half second.
-        {link.packetCount > 0 ? ` ${link.packetCount} packet${link.packetCount === 1 ? "" : "s"} on this link.` : ""}
+        {link && link.packetCount > 0
+          ? ` ${link.packetCount} packet${link.packetCount === 1 ? "" : "s"} on this link.`
+          : ""}
       </p>
-      {link.text && <p className="mt-3 text-sm">{link.text}</p>}
-      <p className="mt-3 font-mono text-[11px] break-all text-muted-foreground">{link.lastHex}</p>
+      {link?.text && <p className="mt-3 text-sm">{link.text}</p>}
+      {link?.lastHex && (
+        <p className="mt-3 font-mono text-[11px] break-all text-muted-foreground">{link.lastHex}</p>
+      )}
+      <Button type="button" className="mt-4 h-12 w-full text-base" disabled={!linked} onClick={onCheckIn}>
+        Check in
+      </Button>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Writes a check-in to the beacon. The sketch prints received on the serial monitor.
+      </p>
     </section>
   );
 }
