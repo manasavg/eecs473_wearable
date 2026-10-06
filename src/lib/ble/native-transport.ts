@@ -79,7 +79,11 @@ export interface NativeCentral {
     displayMode?: "alert" | "list";
   }): Promise<NativeDevice>;
   getDevices(deviceIds: string[]): Promise<NativeDevice[]>;
-  connect(deviceId: string, onDisconnect?: (deviceId: string) => void): Promise<void>;
+  connect(
+    deviceId: string,
+    onDisconnect?: (deviceId: string) => void,
+    options?: { timeout?: number; skipDescriptorDiscovery?: boolean },
+  ): Promise<void>;
   disconnect(deviceId: string): Promise<void>;
   getServices(deviceId: string): Promise<GattService[]>;
   read(deviceId: string, service: string, characteristic: string): Promise<DataView>;
@@ -209,7 +213,16 @@ export class NativeBleTransport implements BleTransport {
     this.deviceId = device.deviceId;
     this.deviceName = device.name || readStorage(DEVICE_NAME_KEY) || "Leader_Device";
     try {
-      await central.connect(device.deviceId, () => this.handleDrop());
+      // The sketch notifies a counter as soon as the link is up. Waiting on
+      // descriptor discovery then hits the plugin's 10s "Connection timeout".
+      // Notifications do not need that discovery.
+      if (!this.injected) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+      await central.connect(device.deviceId, () => this.handleDrop(), {
+        timeout: 20000,
+        skipDescriptorDiscovery: true,
+      });
       const services = await central.getServices(device.deviceId);
       const service = services.find((item) => sameUuid(item.uuid, LIVE_SERVICE_UUID));
       if (!service) {
@@ -343,6 +356,11 @@ function writeStorage(key: string, value: string): void {
 
 function explainBleError(error: unknown): Error {
   const message = error instanceof Error ? error.message : "Could not open the beacon.";
+  if (/connection timeout/i.test(message)) {
+    return new Error(
+      "The phone found Leader_Device, then the link timed out. Reset the ESP32, keep it next to the phone, and connect again.",
+    );
+  }
   if (/unsupported/i.test(message)) {
     return new Error("Bluetooth needs a real iPhone. The iOS simulator has no radio.");
   }

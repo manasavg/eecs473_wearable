@@ -1,5 +1,5 @@
 diff --git a/node_modules/@capacitor-community/bluetooth-le/ios/Sources/BluetoothLe/DeviceManager.swift b/node_modules/@capacitor-community/bluetooth-le/ios/Sources/BluetoothLe/DeviceManager.swift
-index f302339..a847b1f 100644
+index f302339..0843c96 100644
 --- a/node_modules/@capacitor-community/bluetooth-le/ios/Sources/BluetoothLe/DeviceManager.swift
 +++ b/node_modules/@capacitor-community/bluetooth-le/ios/Sources/BluetoothLe/DeviceManager.swift
 @@ -121,8 +121,11 @@ class DeviceManager: NSObject, CBCentralManagerDelegate {
@@ -58,3 +58,12 @@ index f302339..a847b1f 100644
                          log("Selected device")
                          self?.stopScan()
                          self?.resolve("startScanning", deviceId)
+@@ -271,6 +279,8 @@ class DeviceManager: NSObject, CBCentralManagerDelegate {
+         let key = "connect|\(device.getId())"
+         self.callbackMap[key] = callback
+         log("Connecting to peripheral", device.getPeripheral())
++        // iOS drops or stalls the link if a scan is still running.
++        self.stopScan()
+         self.centralManager.connect(device.getPeripheral(), options: nil)
+         self.setConnectionTimeout(key, "Connection timeout.", device, connectionTimeout)
+     }
