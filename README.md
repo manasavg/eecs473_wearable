@@ -49,7 +49,7 @@ Search the repo for `TODO(ble)`.
 | --- | --- |
 | `firmware/leader_device/leader_device.ino` | The sketch already on the ESP32. Name `Leader_Device`, one service, TX notify and RX write |
 | `src/lib/ble/uuids.ts` | Those UUIDs, plus the wristband characteristics to add later |
-| `src/lib/ble/live-link.ts` | Counter and the setup string. Also accepts a 9-byte follower on that characteristic |
+| `src/lib/ble/live-link.ts` | One-byte TX counter. Also accepts a 9-byte follower on that characteristic |
 | `src/lib/ble/protocol.ts` | Wristband byte codec. Flip `ANGLE_SIGN` if the BU04 angle runs the other way |
 | `src/lib/ble/web-bluetooth-transport.ts` | Chooser, notify, reconnect. Subscribes to extra characteristics only if they exist |
 | `src/lib/ble/native-transport.ts` | iPhone Core Bluetooth. Runs in the Capacitor app, not in Safari |
