@@ -42,8 +42,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${outfit.variable} ${fraunces.variable} ${mono.variable}`}>
-      <body className="antialiased">
+    <html
+      lang="en"
+      className={`${outfit.variable} ${fraunces.variable} ${mono.variable}`}
+      // The phone preview stamps __gcrremoteframetoken on <html> before React hydrates.
+      // Without this, that extra attribute aborts the whole page.
+      suppressHydrationWarning
+    >
+      <body className="antialiased" suppressHydrationWarning>
         {children}
         <Toaster position="top-center" />
       </body>
