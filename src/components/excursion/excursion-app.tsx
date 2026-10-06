@@ -5,6 +5,7 @@ import { Bluetooth, Moon, Sun, TriangleAlert, Volume2, VolumeX } from "lucide-re
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { BROADCAST_ID, THRESHOLD_MAX_M, THRESHOLD_MIN_M } from "@/lib/ble/constants";
+import { isNativeShell } from "@/lib/ble/create-transport";
 import { webBluetoothAvailable } from "@/lib/ble/web-bluetooth-transport";
 import { Status } from "@/lib/ble/types";
 import { activityText, batteryBand, formatAge, formatClock, statusLabel } from "@/lib/format";
@@ -24,8 +25,11 @@ export function ExcursionApp() {
   const linked = state.connection === "connected";
   const onTrail = state.mode !== "idle";
   const [ble, setBle] = useState<boolean | null>(null);
+  const [nativeShell, setNativeShell] = useState(false);
   useEffect(() => {
-    setBle(webBluetoothAvailable());
+    const native = isNativeShell();
+    setNativeShell(native);
+    setBle(native || webBluetoothAvailable());
   }, []);
   const lowMembers = state.members.filter(
     (member) => member.batteryPercent != null && member.batteryPercent < 20,
@@ -77,6 +81,7 @@ export function ExcursionApp() {
       {!onTrail ? (
         <Gate
           ble={ble}
+          nativeShell={nativeShell}
           busy={app.busy}
           error={state.error}
           rememberedName={app.rememberedName}
@@ -244,6 +249,7 @@ export function ExcursionApp() {
 
 function Gate({
   ble,
+  nativeShell,
   busy,
   error,
   rememberedName,
@@ -252,6 +258,7 @@ function Gate({
   onRemembered,
 }: {
   ble: boolean | null;
+  nativeShell: boolean;
   busy: boolean;
   error: string | null;
   rememberedName: string | null;
@@ -306,9 +313,11 @@ function Gate({
       </div>
 
       <p className="max-w-prose text-sm text-muted-foreground">
-        {ble === false
-          ? "This browser has no Bluetooth API. Chrome on Android can connect to the beacon. You can still practice with the demo group, and the iPhone transport is marked TODO(ble) in the code."
-          : "Chrome will ask which Bluetooth device to use. Pick Leader_Device. That is the name in the ESP32 sketch."}
+        {nativeShell
+          ? "Connect looks for Leader_Device. iOS asks for Bluetooth permission the first time. The simulator has no radio, so this has to run on the phone."
+          : ble === false
+            ? "Safari cannot open Bluetooth. Chrome on Android can. On an iPhone, build this project on a Mac with npm run cap:sync, then run it from Xcode. The demo group works in this browser."
+            : "Chrome will ask which Bluetooth device to use. Pick Leader_Device. That is the name in the ESP32 sketch."}
       </p>
     </main>
   );

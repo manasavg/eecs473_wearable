@@ -52,7 +52,7 @@ Search the repo for `TODO(ble)`.
 | `src/lib/ble/live-link.ts` | Counter and the setup string. Also accepts a 9-byte follower on that characteristic |
 | `src/lib/ble/protocol.ts` | Wristband byte codec. Flip `ANGLE_SIGN` if the BU04 angle runs the other way |
 | `src/lib/ble/web-bluetooth-transport.ts` | Chooser, notify, reconnect. Subscribes to extra characteristics only if they exist |
-| `src/lib/ble/native-transport.todo.ts` | iPhone build. Safari has no Web Bluetooth |
+| `src/lib/ble/native-transport.ts` | iPhone Core Bluetooth. Runs in the Capacitor app, not in Safari |
 | `src/lib/ble/create-transport.ts` | Switch that picks demo, Web Bluetooth, or native |
 | `src/lib/ble/ranging.ts` | Demo copy of the missed-ping and separation rules |
 | `PROTOCOL.md` | The contract to implement on the ESP32 |
@@ -62,6 +62,41 @@ link sheet can change the name prefix if a module advertises something else.
 
 The packet layout, including a known test vector, is in `PROTOCOL.md`.
 `npm test` locks that vector.
+
+## iPhone
+
+Safari cannot open the ESP32. The native transport is `src/lib/ble/native-transport.ts`.
+It uses Core Bluetooth through Capacitor, and it only runs inside the iOS app.
+Chrome on Android keeps using the website.
+
+Build that app on a Mac. Xcode and a real iPhone are required. The simulator
+has no Bluetooth radio.
+
+```bash
+npm install
+npx cap add ios
+```
+
+Open `ios/App/App/Info.plist` and add:
+
+```xml
+<key>NSBluetoothAlwaysUsageDescription</key>
+<string>Excursion connects to the Leader_Device beacon.</string>
+```
+
+Without that key, iOS kills the app the first time it touches Bluetooth.
+
+```bash
+npm run cap:sync
+npx cap open ios
+```
+
+In Xcode, select your iPhone, trust the developer certificate, and run.
+**Connect the beacon** shows a list. Pick `Leader_Device`. The counter on
+the dashboard is the same `uint32` the ESP32 notifies every 500 ms.
+
+`npm run dev` is still the browser app. `npm run cap:sync` rebuilds the
+static site and copies it into the Xcode project.
 
 ## Demo trail
 

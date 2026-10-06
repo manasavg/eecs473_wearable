@@ -5,6 +5,7 @@ import {
   decodeFollower,
   decodeLeader,
 } from "./protocol";
+import type { BleEvent } from "./transport";
 import type { FollowerInfo } from "./types";
 
 /**
@@ -64,6 +65,24 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
   }
 
   return { ...base, text: decodeText(bytes) };
+}
+
+/** One notification, as the events the dashboard already understands. */
+export function eventsFromNotify(bytes: Uint8Array): BleEvent[] {
+  const sample = parseLiveNotify(bytes);
+  const events: BleEvent[] = [];
+  if (sample.follower) {
+    events.push({ type: "follower", info: sample.follower });
+  } else if (sample.leaderBattery !== null && sample.counter == null) {
+    events.push({ type: "leader", batteryPercent: sample.leaderBattery });
+  }
+  events.push({
+    type: "live",
+    counter: sample.counter,
+    text: sample.text,
+    hex: sample.hex,
+  });
+  return events;
 }
 
 export function bytesToHex(bytes: Uint8Array): string {

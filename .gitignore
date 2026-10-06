@@ -40,5 +40,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# Capacitor iOS build output. The Xcode project itself can be committed.
+ios/App/Pods
+ios/App/App/public
+ios/DerivedData
+
 # source proposal uploaded with the task
 /uploads

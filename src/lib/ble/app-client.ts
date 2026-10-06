@@ -4,7 +4,6 @@ import { MockTrailTransport, type DemoControls } from "./mock-transport";
 import { clampThreshold } from "./protocol";
 import type { BleEvent, BleTransport } from "./transport";
 import { CmdType, Status, type FollowerInfo, type LabSample } from "./types";
-import { WebBluetoothTransport } from "./web-bluetooth-transport";
 
 /**
  * Phone side of Appendix C `class App`.
@@ -156,11 +155,7 @@ export class ExcursionAppClient {
     });
 
     try {
-      if (link instanceof WebBluetoothTransport) {
-        await link.connect(remembered);
-      } else {
-        await link.connect();
-      }
+      await link.connect(remembered);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not connect.";
       const failed = this.transport;

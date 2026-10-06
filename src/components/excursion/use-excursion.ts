@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ExcursionAppClient, type AppState } from "@/lib/ble/app-client";
+import { isNativeShell } from "@/lib/ble/create-transport";
 import type { DemoControls } from "@/lib/ble/mock-transport";
+import { rememberedNativeBeaconName } from "@/lib/ble/native-transport";
 import { rememberedBeaconName } from "@/lib/ble/web-bluetooth-transport";
 import { activityText, wristbandName } from "@/lib/format";
 import { buzzAlert, playAlarm, playOk, unlockAudio } from "@/lib/sound";
@@ -40,7 +42,8 @@ export function useExcursion() {
     const saved = Number(localStorage.getItem(THRESHOLD_KEY));
     if (Number.isFinite(saved) && saved > 0) client.setThreshold(saved);
     setPrefsReady(true);
-    void rememberedBeaconName().then(setRememberedName);
+    if (isNativeShell()) setRememberedName(rememberedNativeBeaconName());
+    else void rememberedBeaconName().then(setRememberedName);
     return client.subscribe(setState);
   }, [client]);
 
@@ -131,8 +134,8 @@ export function useExcursion() {
       setBusy(true);
       try {
         await client.connectDevice("beacon", undefined, remembered);
-        const name = await rememberedBeaconName();
-        setRememberedName(name);
+        if (isNativeShell()) setRememberedName(rememberedNativeBeaconName());
+        else setRememberedName(await rememberedBeaconName());
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Could not connect to the beacon.");
       } finally {

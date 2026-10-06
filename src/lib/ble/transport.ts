@@ -17,7 +17,7 @@ export type BleEvent =
   | { type: "live"; counter: number | null; text: string | null; hex: string };
 
 export interface BleTransport {
-  connect(): Promise<void>;
+  connect(remembered?: boolean): Promise<void>;
   disconnect(): Promise<void>;
   writeCommand(command: AppCommand): Promise<void>;
   subscribe(listener: (event: BleEvent) => void): () => void;

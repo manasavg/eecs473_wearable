@@ -1,4 +1,4 @@
-import { parseLiveNotify } from "./live-link";
+import { eventsFromNotify } from "./live-link";
 import { decodeAlert, decodeFollower, decodeLeader, encodeCommand, viewToBytes } from "./protocol";
 import type { BleEvent, BleTransport } from "./transport";
 import type { AppCommand } from "./types";
@@ -209,18 +209,7 @@ export class WebBluetoothTransport implements BleTransport {
   }
 
   private emitSample(bytes: Uint8Array): void {
-    const sample = parseLiveNotify(bytes);
-    if (sample.follower) {
-      this.emit({ type: "follower", info: sample.follower });
-    } else if (sample.leaderBattery !== null && sample.counter == null) {
-      this.emit({ type: "leader", batteryPercent: sample.leaderBattery });
-    }
-    this.emit({
-      type: "live",
-      counter: sample.counter,
-      text: sample.text,
-      hex: sample.hex,
-    });
+    for (const event of eventsFromNotify(bytes)) this.emit(event);
   }
 
   private async listenIfPresent(
