@@ -47,7 +47,7 @@ Search the repo for `TODO(ble)`.
 
 | File | What you change |
 | --- | --- |
-| `firmware/leader_device/leader_device.ino` | The sketch already on the ESP32. Name `Leader_Device`, one service, one characteristic |
+| `firmware/leader_device/leader_device.ino` | The sketch already on the ESP32. Name `Leader_Device`, one service, TX notify and RX write |
 | `src/lib/ble/uuids.ts` | Those UUIDs, plus the wristband characteristics to add later |
 | `src/lib/ble/live-link.ts` | Counter and the setup string. Also accepts a 9-byte follower on that characteristic |
 | `src/lib/ble/protocol.ts` | Wristband byte codec. Flip `ANGLE_SIGN` if the BU04 angle runs the other way |
