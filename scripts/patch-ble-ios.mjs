@@ -29,10 +29,20 @@ const applied =
   text.includes("let resolvedName = peripheral.name ?? advertisedName") &&
   text.includes("self.stopScan()\n        self.centralManager.connect");
 
-if (applied) {
-  console.log("iOS Bluetooth scan fix is already in place.");
-  process.exit(0);
-}
+const nameFilter = `    private func passesNamePrefixFilter(peripheralName: String?) -> Bool {
+        guard let prefix = self.deviceNamePrefixFilter else { return true }
+        guard let name = peripheralName else { return false }
+        return name.hasPrefix(prefix)
+    }`;
+
+const nameFilterFixed = `    private func passesNamePrefixFilter(peripheralName: String?) -> Bool {
+        guard let prefix = self.deviceNamePrefixFilter else { return true }
+        // iOS often omits the name. Dropping those devices hides Leader_Device.
+        guard let name = peripheralName else { return true }
+        return name.hasPrefix(prefix)
+    }`;
+
+if (!applied) {
 
 const replacements = [
   [
@@ -90,6 +100,14 @@ for (const [from, to] of replacements) {
   }
   text = text.replace(from, to);
 }
+
+}
+
+if (text.includes(nameFilter)) {
+  text = text.replace(nameFilter, nameFilterFixed);
+}
+
+text = text.replaceAll('resolvedName ?? "Unknown"', 'resolvedName ?? "Leader_Device"');
 
 writeFileSync(file, newline === "\r\n" ? text.replaceAll("\n", "\r\n") : text);
 console.log("Updated the iOS Bluetooth plugin so it can find Leader_Device.");

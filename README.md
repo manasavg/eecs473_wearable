@@ -95,9 +95,7 @@ In Xcode, select your iPhone, trust the developer certificate, and run.
 **Connect the beacon** shows a list. Pick `Leader_Device`. The counter on
 the dashboard is the same `uint32` the ESP32 notifies every 500 ms.
 
-That scan matches the original sketch, including `setMinPreferred(0x06)`.
-`npm install` updates the iOS Bluetooth plugin so the phone can find the
-advertised name when the 128-bit service UUID does not fit in the same packet.
+The phone scans for service `2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1` from the original sketch. It does not also filter on the name, because iOS often leaves that blank and the list would stay empty.
 
 `npm run dev` is still the browser app. `npm run cap:sync` rebuilds the
 static site and copies it into the Xcode project.

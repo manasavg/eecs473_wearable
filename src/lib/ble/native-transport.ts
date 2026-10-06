@@ -10,7 +10,6 @@ import {
   LEADER_STATUS_UUID,
   LIVE_DATA_UUID,
   LIVE_SERVICE_UUID,
-  getBleNamePrefix,
 } from "./uuids";
 
 /**
@@ -185,11 +184,10 @@ export class NativeBleTransport implements BleTransport {
   }
 
   private async pickDevice(central: NativeCentral): Promise<NativeDevice> {
-    // The original sketch advertises the name Leader_Device. Its 128-bit
-    // service UUID often does not fit in the same packet as setMinPreferred(),
-    // so the scan matches the name and still opens this service after connect.
+    // Scan for the service in the original sketch. A name filter hides it:
+    // iOS often leaves the advertised name blank until after the first connection.
     return central.requestDevice({
-      namePrefix: getBleNamePrefix(),
+      services: [LIVE_SERVICE_UUID],
       optionalServices: [LIVE_SERVICE_UUID],
       displayMode: "list",
     });

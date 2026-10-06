@@ -10,6 +10,7 @@ import type { BleEvent } from "./transport.ts";
 
 class FakeCentral implements NativeCentral {
   requestCount = 0;
+  requestOptions: { services?: string[]; namePrefix?: string } | undefined;
   connectOptions: { timeout?: number; skipDescriptorDiscovery?: boolean } | undefined;
   readonly writes: Uint8Array[] = [];
   private notify: ((value: DataView) => void) | null = null;
@@ -19,8 +20,9 @@ class FakeCentral implements NativeCentral {
   async isEnabled(): Promise<boolean> {
     return true;
   }
-  async requestDevice(): Promise<{ deviceId: string; name?: string }> {
+  async requestDevice(options?: { services?: string[]; namePrefix?: string }): Promise<{ deviceId: string; name?: string }> {
     this.requestCount += 1;
+    this.requestOptions = options;
     return { deviceId: "iphone-beacon", name: "Leader_Device" };
   }
   async getDevices(deviceIds: string[]): Promise<{ deviceId: string; name?: string }[]> {
@@ -93,6 +95,8 @@ describe("NativeBleTransport", () => {
     const events = eventsOf(link);
     await link.connect();
     assert.equal(central.requestCount, 1);
+    assert.deepEqual(central.requestOptions?.services, [LIVE_SERVICE_UUID]);
+    assert.equal(central.requestOptions?.namePrefix, undefined);
     assert.equal(central.connectOptions?.skipDescriptorDiscovery, true);
     assert.equal(central.connectOptions?.timeout, 20000);
     assert.equal(events.some((event) => event.type === "connected" && event.deviceName === "Leader_Device"), true);
