@@ -13,22 +13,23 @@
  * Sketch — fill these in when the native project exists:
  *
  *   import { BleManager } from "react-native-ble-plx";
- *   import { encodeCommand, decodeFollower, decodeLeader, decodeAlert } from "./protocol";
- *   import { EXCURSION_SERVICE_UUID, FOLLOWER_STATUS_UUID, LEADER_STATUS_UUID, ALERT_UUID, COMMAND_UUID } from "./uuids";
+ *   import { encodeCommand } from "./protocol";
+ *   import { LIVE_SERVICE_UUID, LIVE_DATA_UUID } from "./uuids";
+ *   import { parseLiveNotify } from "./live-link";
  *
  *   TODO(ble): const manager = new BleManager();
- *   TODO(ble): manager.startDeviceScan([EXCURSION_SERVICE_UUID], null, (error, device) => {
- *                // Match device.name against getBleNamePrefix(), then stop the scan.
+ *   TODO(ble): manager.startDeviceScan([LIVE_SERVICE_UUID], null, (error, device) => {
+ *                // Match device.name against getBleNamePrefix() ("Leader_Device"), then stop the scan.
  *              });
  *   TODO(ble): await device.connect({ timeout: 8000 });
  *   TODO(ble): await device.discoverAllServicesAndCharacteristics();
- *   TODO(ble): device.monitorCharacteristicForService(EXCURSION_SERVICE_UUID, FOLLOWER_STATUS_UUID, (error, ch) => {
- *                const info = decodeFollower(base64ToBytes(ch.value));
+ *   TODO(ble): device.monitorCharacteristicForService(LIVE_SERVICE_UUID, LIVE_DATA_UUID, (error, ch) => {
+ *                const sample = parseLiveNotify(base64ToBytes(ch.value));
  *              });
- *   TODO(ble): Same monitor for LEADER_STATUS_UUID → decodeLeader, and ALERT_UUID → decodeAlert.
- *   TODO(ble): device.writeCharacteristicWithoutResponseForService(
- *                EXCURSION_SERVICE_UUID,
- *                COMMAND_UUID,
+ *   TODO(ble): Writes (check-in, separation line) go to LIVE_DATA_UUID until COMMAND_UUID exists.
+ *   TODO(ble): device.writeCharacteristicWithResponseForService(
+ *                LIVE_SERVICE_UUID,
+ *                LIVE_DATA_UUID,
  *                bytesToBase64(encodeCommand(command)),
  *              );
  *   TODO(ble): Bonding / LE Secure Connections is required on the ESP32.

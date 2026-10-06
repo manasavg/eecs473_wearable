@@ -8,7 +8,7 @@ import { BROADCAST_ID, THRESHOLD_MAX_M, THRESHOLD_MIN_M } from "@/lib/ble/consta
 import { webBluetoothAvailable } from "@/lib/ble/web-bluetooth-transport";
 import { Status } from "@/lib/ble/types";
 import { activityText, batteryBand, formatAge, formatClock, statusLabel } from "@/lib/format";
-import type { ActivityEntry } from "@/lib/ble/app-client";
+import type { ActivityEntry, LiveLink } from "@/lib/ble/app-client";
 import { cn } from "@/lib/utils";
 import { CompassDial } from "./compass-dial";
 import { FieldSheet } from "./field-sheet";
@@ -93,6 +93,7 @@ export function ExcursionApp() {
               deviceName={state.deviceName}
               leaderBattery={state.leaderBatteryPercent}
               lastPacketAt={state.lastPacketAt}
+              counter={state.liveLink?.counter ?? null}
               now={now}
             />
 
@@ -149,12 +150,16 @@ export function ExcursionApp() {
               onChange={app.setThreshold}
             />
 
+            {state.mode === "beacon" && state.liveLink && (
+              <LiveLinkCard link={state.liveLink} deviceName={state.deviceName} />
+            )}
+
             {state.connection === "scanning" && state.members.length === 0 ? (
               <section className="rounded-3xl border bg-card px-5 py-8">
                 <h2 className="font-display text-2xl">Opening the beacon</h2>
                 <p className="mt-2 text-sm text-muted-foreground">
                   {state.mode === "beacon"
-                    ? "Choose the leader beacon in the system Bluetooth list. It should be the module clipped to this phone."
+                    ? "Choose Leader_Device in the Bluetooth list. That is the ESP32 clipped to this phone."
                     : "Starting the demo group."}
                 </p>
               </section>
@@ -162,8 +167,9 @@ export function ExcursionApp() {
               <section className="rounded-3xl border bg-card px-5 py-8">
                 <h2 className="font-display text-2xl">No wristbands yet</h2>
                 <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-                  Hold Sync on the beacon and on each band. The leader assigns IDs 1 and 2 over LoRa,
-                  and both clocks start at zero. Cards show up on the next 2-second cycle.
+                  {state.mode === "beacon"
+                    ? "This sketch sends a counter, not wristband rows. A card appears here when a notification is the 9-byte follower packet on the same characteristic."
+                    : "Hold Sync on the beacon and on each band. The leader assigns IDs 1 and 2 over LoRa, and both clocks start at zero. Cards show up on the next 2-second cycle."}
                 </p>
               </section>
             ) : (
@@ -302,9 +308,27 @@ function Gate({
       <p className="max-w-prose text-sm text-muted-foreground">
         {ble === false
           ? "This browser has no Bluetooth API. Chrome on Android can connect to the beacon. You can still practice with the demo group, and the iPhone transport is marked TODO(ble) in the code."
-          : "Chrome will ask which Bluetooth device is the leader beacon. If the list is empty, set the advertised name to match your module. That field is in Beacon link once a group is open."}
+          : "Chrome will ask which Bluetooth device to use. Pick Leader_Device. That is the name in the ESP32 sketch."}
       </p>
     </main>
+  );
+}
+
+function LiveLinkCard({ link, deviceName }: { link: LiveLink; deviceName: string | null }) {
+  return (
+    <section className="rounded-3xl border bg-card px-5 py-5">
+      <p className="text-[11px] tracking-[0.22em] text-muted-foreground uppercase">ESP32</p>
+      <h2 className="font-display text-2xl">{deviceName || "Leader_Device"}</h2>
+      <p className="mt-3 font-mono text-5xl text-pine tabular-nums">
+        {link.counter == null ? "—" : link.counter.toLocaleString()}
+      </p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Counter from the beacon. The sketch adds one and notifies every half second.
+        {link.packetCount > 0 ? ` ${link.packetCount} packet${link.packetCount === 1 ? "" : "s"} on this link.` : ""}
+      </p>
+      {link.text && <p className="mt-3 text-sm">{link.text}</p>}
+      <p className="mt-3 font-mono text-[11px] break-all text-muted-foreground">{link.lastHex}</p>
+    </section>
   );
 }
 
@@ -314,6 +338,7 @@ function StatusStrip({
   deviceName,
   leaderBattery,
   lastPacketAt,
+  counter,
   now,
 }: {
   mode: "idle" | "demo" | "beacon";
@@ -321,6 +346,7 @@ function StatusStrip({
   deviceName: string | null;
   leaderBattery: number | null;
   lastPacketAt: number | null;
+  counter: number | null;
   now: number;
 }) {
   const band = batteryBand(leaderBattery);
@@ -345,12 +371,18 @@ function StatusStrip({
         {label}
         {mode === "demo" ? " · Demo group" : deviceName ? ` · ${deviceName}` : ""}
       </span>
-      <span>
-        Beacon battery{" "}
-        <span className={cn("font-mono", band === "low" && "text-clay")}>
-          {leaderBattery == null ? "—" : `${leaderBattery}%`}
+      {counter != null ? (
+        <span>
+          Count <span className="font-mono">{counter.toLocaleString()}</span>
         </span>
-      </span>
+      ) : (
+        <span>
+          Beacon battery{" "}
+          <span className={cn("font-mono", band === "low" && "text-clay")}>
+            {leaderBattery == null ? "—" : `${leaderBattery}%`}
+          </span>
+        </span>
+      )}
       <span className="text-muted-foreground">Packet {formatAge(lastPacketAt, now)}</span>
     </div>
   );

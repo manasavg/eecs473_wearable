@@ -4,23 +4,46 @@ The phone is the BLE **central**. The leader beacon (ESP32) is the **peripheral*
 No cellular link is required. Classic Bluetooth is not used, because iOS will not
 give a third-party app a serial port.
 
-Bytes are little-endian. Every packet starts with a version byte (`1` today,
-`PACKET_VERSION` in `src/lib/ble/constants.ts`). Longer packets are accepted;
-unknown trailing bytes are ignored. A different version byte is rejected.
+## Flashed sketch
 
-UUIDs are provisional. Change them only in `src/lib/ble/uuids.ts`.
+`firmware/leader_device/leader_device.ino` is the firmware already talking to the phone.
+The app connects to it. Do not change these to open the link:
+
+| | |
+| --- | --- |
+| Advertised name | `Leader_Device` |
+| Service | `2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1` |
+| Characteristic | `017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8` (read, write, notify, indicate) |
+
+`setup()` stores the text `Data successfully transmitted`. While the phone is
+connected, `loop()` notifies a little-endian `uint32` every 500 ms and increments it.
+The dashboard shows that counter. A 4-byte notification is the counter, not an alert.
+
+Check-ins and the separation line are written to that same characteristic until a
+dedicated command characteristic exists. The current `loop()` does not read them.
+
+## Wristband packets (next firmware)
+
+Bytes below are little-endian. Every structured packet starts with a version byte
+(`1` today, `PACKET_VERSION` in `src/lib/ble/constants.ts`). Longer packets are
+accepted; unknown trailing bytes are ignored. A different version byte is rejected.
+
+The phone already decodes a 9-byte follower or a 3-byte leader packet if it
+arrives on the characteristic above. It also subscribes to the UUIDs in the table
+if you add those characteristics to the **same** service. They are not on the
+flashed sketch.
 
 | Role | UUID |
 | --- | --- |
-| Service | `47300001-0000-4000-8000-657863757273` |
+| Service (already flashed) | `2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1` |
+| Data (already flashed) | `017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8` |
 | Leader status (read, notify) | `47300002-0000-4000-8000-657863757273` |
 | Follower status (notify) | `47300003-0000-4000-8000-657863757273` |
 | Alert (notify) | `47300004-0000-4000-8000-657863757273` |
 | Command (write or write-without-response) | `47300005-0000-4000-8000-657863757273` |
 
-Advertise the service UUID, and advertise a name that starts with `Excursion`
-(suggested full name: `Excursion-Leader`). The app can override that prefix
-from the Beacon link sheet without a rebuild.
+Keep advertising `Leader_Device` and the service UUID already in the sketch.
+The Beacon link sheet can override the name prefix on this phone only.
 
 Require LE Secure Connections with bonding so a nearby phone cannot write commands.
 

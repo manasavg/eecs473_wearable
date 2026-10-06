@@ -74,6 +74,28 @@ describe("ExcursionAppClient", () => {
     await client.disconnect();
   });
 
+  it("shows the ESP32 counter without inventing a wristband", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: "Data successfully transmitted",
+      hex: "44 61 74 61",
+    });
+    transport.emit({ type: "live", counter: 7, text: null, hex: "07 00 00 00" });
+    const link = client.getState().liveLink;
+    assert.equal(link?.counter, 7);
+    assert.equal(link?.text, "Data successfully transmitted");
+    assert.equal(link?.packetCount, 2);
+    assert.equal(client.getState().members.length, 0);
+    transport.emit({ type: "live", counter: 8, text: null, hex: "08 00 00 00" });
+    assert.equal(client.getState().liveLink?.counter, 8);
+    assert.equal(client.getState().liveLink?.text, "Data successfully transmitted");
+    await client.disconnect();
+  });
+
   it("pages once when status and the alert characteristic both say Need Help", async () => {
     const transport = new ScriptedTransport();
     const client = new ExcursionAppClient();

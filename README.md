@@ -6,9 +6,9 @@ distance, direction, battery, and status, and it sends check-ins. UWB covers
 about 40 m. LoRa check-ins cover about 1.5 km. The screen does not use a cell
 network.
 
-The radios are not required to run it. **Practice with a demo group** is a full
-stand-in for the beacon until the ESP32 is advertising. The dashboard does not
-change when you swap in the real link.
+The radios are not required to practice. **Practice with a demo group** stands in
+for wristbands. **Connect the beacon** opens the ESP32 sketch already running:
+it advertises `Leader_Device` and notifies a counter every half second.
 
 ## Run it
 
@@ -47,17 +47,18 @@ Search the repo for `TODO(ble)`.
 
 | File | What you change |
 | --- | --- |
-| `src/lib/ble/uuids.ts` | Advertised name and the five GATT UUIDs |
-| `src/lib/ble/protocol.ts` | Byte codec. Flip `ANGLE_SIGN` if the BU04 angle runs the other way |
-| `src/lib/ble/web-bluetooth-transport.ts` | Chooser, bonding, reconnect, notify-on-subscribe |
+| `firmware/leader_device/leader_device.ino` | The sketch already on the ESP32. Name `Leader_Device`, one service, one characteristic |
+| `src/lib/ble/uuids.ts` | Those UUIDs, plus the wristband characteristics to add later |
+| `src/lib/ble/live-link.ts` | Counter and the setup string. Also accepts a 9-byte follower on that characteristic |
+| `src/lib/ble/protocol.ts` | Wristband byte codec. Flip `ANGLE_SIGN` if the BU04 angle runs the other way |
+| `src/lib/ble/web-bluetooth-transport.ts` | Chooser, notify, reconnect. Subscribes to extra characteristics only if they exist |
 | `src/lib/ble/native-transport.todo.ts` | iPhone build. Safari has no Web Bluetooth |
 | `src/lib/ble/create-transport.ts` | Switch that picks demo, Web Bluetooth, or native |
 | `src/lib/ble/ranging.ts` | Demo copy of the missed-ping and separation rules |
 | `PROTOCOL.md` | The contract to implement on the ESP32 |
 
-Chrome on Android (and desktop Chrome) can connect as soon as the beacon
-advertises. The Beacon link sheet can change the name prefix to match a module
-that is already showing up on the phone, without editing code.
+Chrome on Android (and desktop Chrome) connects to `Leader_Device`. The Beacon
+link sheet can change the name prefix if a module advertises something else.
 
 The packet layout, including a known test vector, is in `PROTOCOL.md`.
 `npm test` locks that vector.

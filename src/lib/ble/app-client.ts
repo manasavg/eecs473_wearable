@@ -69,6 +69,14 @@ export interface ActivityEntry {
   message?: string;
 }
 
+/** What the flashed ESP32 sketch is sending right now. */
+export interface LiveLink {
+  counter: number | null;
+  text: string | null;
+  packetCount: number;
+  lastHex: string;
+}
+
 export interface AppState {
   mode: "idle" | LinkMode;
   connection: ConnectionState;
@@ -80,6 +88,7 @@ export interface AppState {
   alerts: ActiveAlert[];
   activity: ActivityEntry[];
   lastPacketAt: number | null;
+  liveLink: LiveLink | null;
 }
 
 export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppState {
@@ -94,6 +103,7 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
     alerts: [],
     activity: [],
     lastPacketAt: null,
+    liveLink: null,
   };
 }
 
@@ -295,6 +305,18 @@ export class ExcursionAppClient {
           { ...this.state, members: [], alerts: [] },
           { id: nextId(), at: Date.now(), kind: "cleared" },
         );
+        return;
+      case "live":
+        this.commit({
+          ...this.state,
+          lastPacketAt: Date.now(),
+          liveLink: {
+            counter: event.counter ?? this.state.liveLink?.counter ?? null,
+            text: event.text ?? this.state.liveLink?.text ?? null,
+            packetCount: (this.state.liveLink?.packetCount ?? 0) + 1,
+            lastHex: event.hex,
+          },
+        });
         return;
       default:
         return;

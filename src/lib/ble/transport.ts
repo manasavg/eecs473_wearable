@@ -13,7 +13,8 @@ export type BleEvent =
   | { type: "leader"; batteryPercent: number | null }
   | { type: "follower"; info: FollowerInfo; lab?: LabSample }
   | { type: "alert"; deviceId: number; status: Status; uwbOutOfRange: boolean }
-  | { type: "roster-cleared" };
+  | { type: "roster-cleared" }
+  | { type: "live"; counter: number | null; text: string | null; hex: string };
 
 export interface BleTransport {
   connect(): Promise<void>;

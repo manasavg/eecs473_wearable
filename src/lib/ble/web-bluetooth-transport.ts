@@ -1,19 +1,15 @@
-import {
-  decodeAlert,
-  decodeFollower,
-  decodeLeader,
-  encodeCommand,
-  viewToBytes,
-} from "./protocol";
+import { parseLiveNotify } from "./live-link";
+import { decodeAlert, decodeFollower, decodeLeader, encodeCommand, viewToBytes } from "./protocol";
 import type { BleEvent, BleTransport } from "./transport";
 import type { AppCommand } from "./types";
 import { Status } from "./types";
 import {
   ALERT_UUID,
   COMMAND_UUID,
-  EXCURSION_SERVICE_UUID,
   FOLLOWER_STATUS_UUID,
   LEADER_STATUS_UUID,
+  LIVE_DATA_UUID,
+  LIVE_SERVICE_UUID,
   getBleNamePrefix,
 } from "./uuids";
 
@@ -24,8 +20,10 @@ import {
  * Chrome on Android and desktop Chromium implement this API.
  * Safari on iPhone does not — use native-transport.todo.ts for that build.
  *
- * Search this file for TODO(ble). Those are the spots that change once the
- * module is advertising and the GATT server is flashed.
+ * The flashed sketch (firmware/leader_device/leader_device.ino) has one
+ * service and one characteristic. Notifications from that characteristic
+ * are parsed in live-link.ts. Appendix C characteristics are subscribed
+ * only when the ESP32 has added them to the same service.
  */
 
 const RECONNECT_ATTEMPTS = 3;
@@ -76,16 +74,12 @@ export class WebBluetoothTransport implements BleTransport {
       }
       device = permitted;
     } else {
-      // TODO(ble): The chooser lists devices whose advertised name starts with
-      // the prefix from uuids.ts (or the Beacon link sheet), OR that advertise
-      // EXCURSION_SERVICE_UUID. If the list is empty:
-      //   1. Confirm the ESP32 name (suggested: "Excursion-Leader").
-      //   2. Put the service UUID in the advertising packet, not only the GATT table.
-      // Filters are OR'd. Fields inside one filter are AND'd.
+      // Filters are OR'd. The sketch advertises the name Leader_Device and
+      // puts LIVE_SERVICE_UUID in the advertising packet.
       try {
         device = await navigator.bluetooth.requestDevice({
-          filters: [{ namePrefix: prefix }, { services: [EXCURSION_SERVICE_UUID] }],
-          optionalServices: [EXCURSION_SERVICE_UUID],
+          filters: [{ namePrefix: prefix }, { services: [LIVE_SERVICE_UUID] }],
+          optionalServices: [LIVE_SERVICE_UUID],
         });
       } catch (error) {
         this.wantLink = false;
@@ -157,33 +151,44 @@ export class WebBluetoothTransport implements BleTransport {
     this.opening = true;
     try {
       const server = await device.gatt.connect();
-      const service = await server.getPrimaryService(EXCURSION_SERVICE_UUID).catch(() => {
+      const service = await server.getPrimaryService(LIVE_SERVICE_UUID).catch(() => {
         throw new Error(
-          "The device is connected, but it does not expose the Excursion service. Match src/lib/ble/uuids.ts to the ESP32.",
+          "The device is connected, but it does not expose 2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1. That is the service in firmware/leader_device.",
         );
       });
 
-      const leader = await characteristic(service, LEADER_STATUS_UUID, "leader status");
-      const follower = await characteristic(service, FOLLOWER_STATUS_UUID, "follower status");
-      const alert = await characteristic(service, ALERT_UUID, "alert");
-      const command = await characteristic(service, COMMAND_UUID, "command");
-      this.command = command;
+      const data = await characteristic(service, LIVE_DATA_UUID, "data");
+      // The flashed sketch writes on this same characteristic. A later sketch
+      // can add COMMAND_UUID; prefer that so a check-in does not overwrite the counter.
+      const command = await optionalCharacteristic(service, COMMAND_UUID);
+      this.command =
+        command && (command.properties.write || command.properties.writeWithoutResponse)
+          ? command
+          : data;
 
       // TODO(ble): Pairing is done by the phone OS, not by this file.
-      // On the ESP32, require LE Secure Connections with bonding so a nearby
-      // hiker's phone cannot write the command characteristic. After the first
-      // bond, reconnect should not show a PIN. A PIN prompt means the firmware
-      // is still on legacy pairing — switch it to LESC before the hike.
-      // Reject writes if you later surface an "unencrypted link" callback.
+      // The current sketch does not require a bond. Before a hike, require
+      // LE Secure Connections so a nearby phone cannot write this characteristic.
 
-      await this.listen(leader, (bytes) => {
+      await this.listen(data, (bytes) => this.emitSample(bytes));
+      if (data.properties.read) {
+        try {
+          const value = await data.readValue();
+          this.emitSample(viewToBytes(value));
+        } catch {
+          // The notify subscription still delivers the next counter.
+        }
+      }
+
+      // TODO(ble): Present only after the ESP32 adds them to LIVE_SERVICE_UUID.
+      await this.listenIfPresent(service, LEADER_STATUS_UUID, (bytes) => {
         const status = decodeLeader(bytes);
         this.emit({ type: "leader", batteryPercent: status.batteryPercent });
       });
-      await this.listen(follower, (bytes) => {
+      await this.listenIfPresent(service, FOLLOWER_STATUS_UUID, (bytes) => {
         this.emit({ type: "follower", info: decodeFollower(bytes) });
       });
-      await this.listen(alert, (bytes) => {
+      await this.listenIfPresent(service, ALERT_UUID, (bytes) => {
         const notice = decodeAlert(bytes);
         this.emit({
           type: "alert",
@@ -193,20 +198,6 @@ export class WebBluetoothTransport implements BleTransport {
         });
       });
 
-      if (leader.properties.read) {
-        try {
-          const value = await leader.readValue();
-          const status = decodeLeader(viewToBytes(value));
-          this.emit({ type: "leader", batteryPercent: status.batteryPercent });
-        } catch {
-          // The notify subscription still delivers the next sample.
-        }
-      }
-
-      // TODO(ble): On subscribe (CCC write), push the current follower table
-      // from the ESP32 so the leader does not wait a full 2 s cycle for the
-      // first cards. One notification per wristband, same follower packet.
-
       this.reconnectsLeft = RECONNECT_ATTEMPTS;
       this.emit({
         type: "connected",
@@ -215,6 +206,31 @@ export class WebBluetoothTransport implements BleTransport {
     } finally {
       this.opening = false;
     }
+  }
+
+  private emitSample(bytes: Uint8Array): void {
+    const sample = parseLiveNotify(bytes);
+    if (sample.follower) {
+      this.emit({ type: "follower", info: sample.follower });
+    } else if (sample.leaderBattery !== null && sample.counter == null) {
+      this.emit({ type: "leader", batteryPercent: sample.leaderBattery });
+    }
+    this.emit({
+      type: "live",
+      counter: sample.counter,
+      text: sample.text,
+      hex: sample.hex,
+    });
+  }
+
+  private async listenIfPresent(
+    service: BluetoothRemoteGATTService,
+    uuid: string,
+    onPacket: (bytes: Uint8Array) => void,
+  ): Promise<void> {
+    const found = await optionalCharacteristic(service, uuid);
+    if (!found) return;
+    await this.listen(found, onPacket);
   }
 
   private async listen(
@@ -290,14 +306,25 @@ async function characteristic(
     return await service.getCharacteristic(uuid);
   } catch {
     throw new Error(
-      `The Excursion service is missing the ${label} characteristic (${uuid}). Match src/lib/ble/uuids.ts to the ESP32.`,
+      `Leader_Device is missing the ${label} characteristic (${uuid}). That UUID is in firmware/leader_device.`,
     );
+  }
+}
+
+async function optionalCharacteristic(
+  service: BluetoothRemoteGATTService,
+  uuid: string,
+): Promise<BluetoothRemoteGATTCharacteristic | null> {
+  try {
+    return await service.getCharacteristic(uuid);
+  } catch {
+    return null;
   }
 }
 
 function explainRequestError(error: unknown, prefix: string): string {
   if (error instanceof DOMException && error.name === "NotFoundError") {
-    return `No beacon chosen. If the list was empty, the advertised name does not start with “${prefix}”. Set that name in Beacon link, or on the ESP32.`;
+    return `No beacon chosen. If the list was empty, the ESP32 is not advertising as “${prefix}”. The sketch uses Leader_Device.`;
   }
   if (error instanceof Error && error.message) return error.message;
   return "Could not open the Bluetooth chooser.";

@@ -16,9 +16,10 @@ import {
   ALERT_UUID,
   BLE_NAME_PREFIX,
   COMMAND_UUID,
-  EXCURSION_SERVICE_UUID,
   FOLLOWER_STATUS_UUID,
   LEADER_STATUS_UUID,
+  LIVE_DATA_UUID,
+  LIVE_SERVICE_UUID,
   getBleNamePrefix,
   setBleNamePrefix,
 } from "@/lib/ble/uuids";
@@ -59,8 +60,8 @@ export function LinkSheet({
               aria-label="Advertised name prefix"
             />
             <span className="text-xs text-muted-foreground">
-              The chooser looks for a name starting with this. Default in code is “{BLE_NAME_PREFIX}”.
-              Change it here to match the module already paired to the phone, then connect again.
+              The chooser looks for a name starting with this. The flashed sketch advertises “{BLE_NAME_PREFIX}”.
+              Change it here only if the ESP32 name is different, then connect again.
             </span>
           </label>
           <Button
@@ -75,17 +76,23 @@ export function LinkSheet({
           </Button>
 
           <dl className="space-y-2 font-mono text-[11px] leading-relaxed break-all">
-            <Uuid label="Service" value={EXCURSION_SERVICE_UUID} />
-            <Uuid label="Leader" value={LEADER_STATUS_UUID} />
-            <Uuid label="Follower" value={FOLLOWER_STATUS_UUID} />
-            <Uuid label="Alert" value={ALERT_UUID} />
-            <Uuid label="Command" value={COMMAND_UUID} />
+            <Uuid label="Service (on the ESP32)" value={LIVE_SERVICE_UUID} />
+            <Uuid label="Data (read, write, notify)" value={LIVE_DATA_UUID} />
+          </dl>
+          <p className="text-xs text-muted-foreground">
+            That characteristic sends a 4-byte counter every half second. The text from setup is
+            “Data successfully transmitted”.
+          </p>
+          <dl className="space-y-2 font-mono text-[11px] leading-relaxed break-all">
+            <Uuid label="Leader, when added" value={LEADER_STATUS_UUID} />
+            <Uuid label="Follower, when added" value={FOLLOWER_STATUS_UUID} />
+            <Uuid label="Alert, when added" value={ALERT_UUID} />
+            <Uuid label="Command, when added" value={COMMAND_UUID} />
           </dl>
 
           <p className="text-xs text-muted-foreground">
-            UUIDs and the byte layout live in <code>src/lib/ble/uuids.ts</code> and{" "}
-            <code>src/lib/ble/protocol.ts</code>. Search the repo for <code>TODO(ble)</code> before
-            wiring a module. {NATIVE_BLE_TODO}
+            The phone already subscribes if those four show up on the same service. Until then,
+            wristband cards stay empty and the counter is the link. {NATIVE_BLE_TODO}
           </p>
 
           <Button
