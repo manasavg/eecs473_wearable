@@ -1,0 +1,158 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { ExcursionAppClient } from "./app-client.ts";
+import { MockTrailTransport } from "./mock-transport.ts";
+import type { BleEvent, BleTransport } from "./transport.ts";
+import { BROADCAST_ID } from "./constants.ts";
+import { CmdType, Status, type AppCommand, type FollowerInfo } from "./types.ts";
+
+class ScriptedTransport implements BleTransport {
+  readonly commands: AppCommand[] = [];
+  private listener: ((event: BleEvent) => void) | null = null;
+
+  async connect(): Promise<void> {
+    this.listener?.({ type: "connected", deviceName: "Test beacon" });
+  }
+
+  async disconnect(): Promise<void> {
+    this.listener?.({ type: "disconnected", unexpected: false });
+  }
+
+  async writeCommand(command: AppCommand): Promise<void> {
+    this.commands.push(command);
+  }
+
+  subscribe(listener: (event: BleEvent) => void): () => void {
+    this.listener = listener;
+    return () => {
+      this.listener = null;
+    };
+  }
+
+  emit(event: BleEvent): void {
+    this.listener?.(event);
+  }
+}
+
+function follower(overrides: Partial<FollowerInfo> = {}): FollowerInfo {
+  return {
+    deviceId: 1,
+    status: Status.OK,
+    batteryPercent: 90,
+    distanceM: 14,
+    angleDeg: -20,
+    uwbOutOfRange: false,
+    ...overrides,
+  };
+}
+
+describe("ExcursionAppClient", () => {
+  it("sends the separation line when the beacon connects", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ thresholdMeters: 25 });
+    await client.connectDevice("beacon", transport);
+    assert.equal(client.getState().connection, "connected");
+    assert.equal(client.getState().deviceName, "Test beacon");
+    assert.equal(transport.commands.length, 1);
+    assert.equal(transport.commands[0].type, CmdType.SET_THRESHOLD);
+    assert.equal(transport.commands[0].targetId, BROADCAST_ID);
+    assert.equal(transport.commands[0].thresholdMeters, 25);
+    await client.disconnect();
+  });
+
+  it("check-in writes CHECK_IN and stamps every wristband for the group", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    transport.emit({ type: "follower", info: follower({ deviceId: 1 }) });
+    transport.emit({ type: "follower", info: follower({ deviceId: 2, angleDeg: 15 }) });
+    await client.sendCheckIn(BROADCAST_ID);
+    const command = transport.commands.at(-1);
+    assert.equal(command?.type, CmdType.CHECK_IN);
+    assert.equal(command?.targetId, BROADCAST_ID);
+    assert.ok(client.getState().members.every((member) => member.checkInSentAt));
+    await client.disconnect();
+  });
+
+  it("pages once when status and the alert characteristic both say Need Help", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    transport.emit({ type: "follower", info: follower() });
+    const help = follower({ status: Status.NEED_HELP });
+    transport.emit({ type: "follower", info: help });
+    transport.emit({
+      type: "alert",
+      deviceId: 1,
+      status: Status.NEED_HELP,
+      uwbOutOfRange: false,
+    });
+    const state = client.getState();
+    assert.equal(state.alerts.length, 1);
+    assert.equal(state.alerts[0].status, Status.NEED_HELP);
+    assert.equal(state.activity.filter((entry) => entry.kind === "help").length, 1);
+    await client.disconnect();
+  });
+
+  it("keeps the last fix when UWB drops", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    transport.emit({ type: "follower", info: follower({ distanceM: 22.5, angleDeg: 40 }) });
+    transport.emit({
+      type: "follower",
+      info: follower({
+        status: Status.OUT_OF_RANGE,
+        distanceM: null,
+        angleDeg: null,
+        uwbOutOfRange: true,
+      }),
+    });
+    const member = client.getState().members[0];
+    assert.equal(member.distanceM, null);
+    assert.equal(member.lastDistanceM, 22.5);
+    assert.equal(member.lastAngleDeg, 40);
+    await client.disconnect();
+  });
+
+  it("refuses a check-in before connect", async () => {
+    const client = new ExcursionAppClient();
+    await assert.rejects(() => client.sendCheckIn(1), /Connect the beacon/);
+  });
+});
+
+describe("demo trail", () => {
+  it("assigns wristbands 1 and 2, then raises Need Help from the 3-second press", async () => {
+    const trail = new MockTrailTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("demo", trail);
+    const ids = client.getState().members.map((member) => member.deviceId);
+    assert.deepEqual(ids, [1, 2]);
+    trail.pressNeedHelp(2);
+    const second = client.getState().members.find((member) => member.deviceId === 2);
+    assert.equal(second?.status, Status.NEED_HELP);
+    assert.equal(client.getState().alerts[0]?.deviceId, 2);
+    trail.pressOk(2);
+    const cleared = client.getState().members.find((member) => member.deviceId === 2);
+    assert.equal(cleared?.status, Status.OK);
+    await client.disconnect();
+  });
+
+  it("drops direction after 10 missed UWB pings and not after one", async () => {
+    const trail = new MockTrailTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("demo", trail);
+    trail.addMisses(1, 1);
+    const holding = client.getState().members.find((member) => member.deviceId === 1);
+    assert.equal(holding?.status, Status.OK);
+    assert.equal(holding?.lab?.missedPings, 1);
+    assert.ok(holding?.distanceM);
+    trail.addMisses(1, 9);
+    const lost = client.getState().members.find((member) => member.deviceId === 1);
+    assert.equal(lost?.status, Status.OUT_OF_RANGE);
+    assert.equal(lost?.uwbOutOfRange, true);
+    assert.equal(lost?.distanceM, null);
+    assert.ok(lost?.lastDistanceM);
+    await client.disconnect();
+  });
+});
