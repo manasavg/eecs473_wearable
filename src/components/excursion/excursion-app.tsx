@@ -86,7 +86,7 @@ export function ExcursionApp() {
         />
       ) : (
         <div className="mt-5 grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 pb-24 md:pb-0">
             <StatusStrip
               mode={state.mode}
               connection={state.connection}
