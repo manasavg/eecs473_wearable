@@ -21,7 +21,9 @@ and increments it. The dashboard shows that counter. A 1-byte notification is
 that counter. A 4-byte notification is still read as a little-endian `uint32`.
 
 Check-ins are written to RX. The packet starts with `1`. The sketch's `onWrite`
-checks that first byte and, when it is `1`, transmits LoRa `CHECK IN`.
+checks that first byte and, when it is `1`, transmits LoRa `CHECK IN`. The phone
+stays on "Waiting for OK" until a follower sends LoRa `OK`. The leader then
+notifies the two bytes `OK` on TX, and the phone shows the group as OK.
 
 ## Wristband packets (next firmware)
 

@@ -8,7 +8,7 @@ network.
 
 The radios are not required to practice. **Practice with a demo group** stands in
 for wristbands. **Connect the beacon** opens the ESP32 sketch already running:
-it advertises the name `Leader_Device_LoRa` and notifies a one-byte counter every 3 seconds. **Check in** writes a packet whose first byte is 1, and the board then transmits LoRa `CHECK IN`.
+it advertises the name `Leader_Device_LoRa` and notifies a one-byte counter every 3 seconds. **Check in** writes a packet whose first byte is 1, and the board then transmits LoRa `CHECK IN`. The phone shows **They're OK** only after a follower sends LoRa `OK` and the leader notifies that back.
 
 ## Run it
 

@@ -1,6 +1,7 @@
 import { BROADCAST_ID, CHECKIN_VIBRATE_MS, DEFAULT_THRESHOLD_M } from "./constants";
 import { createTransport, type LinkMode } from "./create-transport";
 import { MockTrailTransport, type DemoControls } from "./mock-transport";
+import { isFollowerOkSignal } from "./live-link";
 import { clampThreshold } from "./protocol";
 import type { BleEvent, BleTransport } from "./transport";
 import { CmdType, Status, type FollowerInfo, type LabSample } from "./types";
@@ -88,7 +89,9 @@ export interface AppState {
   activity: ActivityEntry[];
   lastPacketAt: number | null;
   liveLink: LiveLink | null;
-  /** When a check-in write reached the leader. The group is OK. No wearable id. */
+  /** When the check-in write reached the leader. The app is waiting for a follower OK. */
+  groupCheckInAt: number | null;
+  /** When the leader notified that a follower pressed OK. No wearable id. */
   groupOkAt: number | null;
 }
 
@@ -105,6 +108,7 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
     activity: [],
     lastPacketAt: null,
     liveLink: null,
+    groupCheckInAt: null,
     groupOkAt: null,
   };
 }
@@ -233,16 +237,8 @@ export class ExcursionAppClient {
       throw error instanceof Error ? error : new Error(message);
     }
     const now = Date.now();
-    const everyone = targetId === BROADCAST_ID;
-    const members = this.state.members.map((member) => {
-      if (!everyone && member.deviceId !== targetId) return member;
-      return { ...member, status: Status.OK, checkInSentAt: now, pendingSince: null };
-    });
-    const alerts = everyone
-      ? []
-      : this.state.alerts.filter((alert) => alert.deviceId !== targetId);
     this.commit(
-      { ...this.state, members, alerts, groupOkAt: now, error: null },
+      { ...this.state, groupCheckInAt: now, groupOkAt: null, error: null },
       { id: nextId(), at: now, kind: "checkin" },
     );
   }
@@ -303,18 +299,25 @@ export class ExcursionAppClient {
           { id: nextId(), at: Date.now(), kind: "cleared" },
         );
         return;
-      case "live":
-        this.commit({
-          ...this.state,
-          lastPacketAt: Date.now(),
-          liveLink: {
-            counter: event.counter ?? this.state.liveLink?.counter ?? null,
-            text: event.text ?? this.state.liveLink?.text ?? null,
-            packetCount: (this.state.liveLink?.packetCount ?? 0) + 1,
-            lastHex: event.hex,
+      case "live": {
+        const now = Date.now();
+        const followerOk = isFollowerOkSignal(event.text);
+        this.commit(
+          {
+            ...this.state,
+            lastPacketAt: now,
+            groupOkAt: followerOk ? now : this.state.groupOkAt,
+            liveLink: {
+              counter: event.counter ?? this.state.liveLink?.counter ?? null,
+              text: event.text ?? this.state.liveLink?.text ?? null,
+              packetCount: (this.state.liveLink?.packetCount ?? 0) + 1,
+              lastHex: event.hex,
+            },
           },
-        });
+          followerOk ? { id: nextId(), at: now, kind: "answered" } : undefined,
+        );
         return;
+      }
       default:
         return;
     }

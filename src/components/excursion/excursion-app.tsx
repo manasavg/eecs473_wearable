@@ -161,21 +161,31 @@ export function ExcursionApp() {
                 link={state.liveLink}
                 deviceName={state.deviceName}
                 linked={linked}
+                groupCheckInAt={state.groupCheckInAt}
                 groupOkAt={state.groupOkAt}
                 onCheckIn={() => void app.checkIn(BROADCAST_ID)}
               />
             )}
 
-            {state.groupOkAt != null && (
+            {state.groupOkAt != null ? (
               <section className="rounded-3xl border border-moss/40 bg-moss/10 px-5 py-6" role="status">
                 <p className="text-[11px] tracking-[0.22em] text-moss uppercase">Group</p>
                 <h2 className="font-display text-3xl text-moss">They&apos;re OK</h2>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Check-in reached {state.deviceName || BLE_NAME_PREFIX} at {formatClock(state.groupOkAt)}.
-                  The leader is sending CHECK IN over LoRa.
+                  The follower pressed OK. {state.deviceName || BLE_NAME_PREFIX} told the phone at{" "}
+                  {formatClock(state.groupOkAt)}.
                 </p>
               </section>
-            )}
+            ) : state.groupCheckInAt != null ? (
+              <section className="rounded-3xl border border-signal/40 bg-signal/10 px-5 py-6" role="status">
+                <p className="text-[11px] tracking-[0.22em] text-signal uppercase">Group</p>
+                <h2 className="font-display text-3xl">Waiting for OK</h2>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Check-in went out at {formatClock(state.groupCheckInAt)}. Press the button on the follower.
+                  The leader tells this phone when that OK arrives.
+                </p>
+              </section>
+            ) : null}
 
             {state.connection === "scanning" && state.members.length === 0 ? (
               <section className="rounded-3xl border bg-card px-5 py-8">
@@ -345,12 +355,14 @@ function LiveLinkCard({
   link,
   deviceName,
   linked,
+  groupCheckInAt,
   groupOkAt,
   onCheckIn,
 }: {
   link: LiveLink | null;
   deviceName: string | null;
   linked: boolean;
+  groupCheckInAt: number | null;
   groupOkAt: number | null;
   onCheckIn: () => void;
 }) {
@@ -375,9 +387,11 @@ function LiveLinkCard({
         Check in
       </Button>
       <p className="mt-2 text-xs text-muted-foreground">
-        {groupOkAt == null
-          ? "Writes a check-in to the leader. The first byte is 1, so the board transmits LoRa “CHECK IN” and the group shows OK."
-          : `They're OK as of ${formatClock(groupOkAt)}. Press again to send another check-in.`}
+        {groupOkAt != null
+          ? `They're OK as of ${formatClock(groupOkAt)}. That came back from the follower.`
+          : groupCheckInAt != null
+            ? `Check-in sent at ${formatClock(groupCheckInAt)}. Waiting for the follower button.`
+            : "Sends CHECK IN to the leader. The group shows OK only after a follower presses its button and the leader notifies this phone."}
       </p>
     </section>
   );

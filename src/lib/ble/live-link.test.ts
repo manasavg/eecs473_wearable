@@ -1,10 +1,19 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { parseLiveNotify } from "./live-link.ts";
+import { isFollowerOkSignal, parseLiveNotify } from "./live-link.ts";
 import { encodeFollower, encodeLeader } from "./protocol.ts";
 import { Status, type FollowerInfo } from "./types.ts";
 
 describe("parseLiveNotify", () => {
+  it("reads the OK the leader notifies after a follower button press", () => {
+    const sample = parseLiveNotify(new TextEncoder().encode("OK"));
+    assert.equal(sample.text, "OK");
+    assert.equal(sample.counter, null);
+    assert.equal(isFollowerOkSignal(sample.text), true);
+    assert.equal(isFollowerOkSignal("OK 2"), true);
+    assert.equal(isFollowerOkSignal("CHECK IN"), false);
+  });
+
   it("reads the one-byte counter the sketch notifies every 3 seconds", () => {
     const sample = parseLiveNotify(new Uint8Array([7]));
     assert.equal(sample.counter, 7);

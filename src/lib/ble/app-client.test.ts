@@ -73,20 +73,25 @@ describe("ExcursionAppClient", () => {
     const command = transport.commands.at(-1);
     assert.equal(command?.type, CmdType.CHECK_IN);
     assert.equal(command?.targetId, BROADCAST_ID);
-    assert.ok(client.getState().members.every((member) => member.checkInSentAt));
+    assert.ok(client.getState().groupCheckInAt);
+    assert.equal(client.getState().groupOkAt, null);
     assert.ok(client.getState().members.every((member) => member.status === Status.OK));
-    assert.ok(client.getState().groupOkAt);
     await client.disconnect();
   });
 
-  it("shows the group OK after a check-in with no wearable id", async () => {
+  it("shows the group OK only after the leader notifies OK", async () => {
     const transport = new ScriptedTransport();
     const client = new ExcursionAppClient();
     await client.connectDevice("beacon", transport);
     await client.sendCheckIn(BROADCAST_ID);
     assert.equal(client.getState().members.length, 0);
-    assert.ok(client.getState().groupOkAt);
+    assert.equal(client.getState().groupOkAt, null);
     assert.equal(client.getState().activity[0]?.kind, "checkin");
+    transport.emit({ type: "live", counter: 4, text: null, hex: "04" });
+    assert.equal(client.getState().groupOkAt, null);
+    transport.emit({ type: "live", counter: null, text: "OK", hex: "4f 4b" });
+    assert.ok(client.getState().groupOkAt);
+    assert.equal(client.getState().activity[0]?.kind, "answered");
     await client.disconnect();
   });
 

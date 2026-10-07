@@ -243,6 +243,17 @@ void loop() {
       Serial.print(rssi);
       Serial.println(" dBm");
 
+      String msg = str;
+      msg.trim();
+      String upper = msg;
+      upper.toUpperCase();
+      if (deviceConnected && pTxCharacteristic != NULL && (upper == "OK" || upper.startsWith("OK "))) {
+        uint8_t okBytes[2] = { 'O', 'K' };
+        pTxCharacteristic->setValue(okBytes, 2);
+        pTxCharacteristic->notify();
+        Serial.println("Phone notified: OK");
+      }
+
       neopixelWrite(BOARD_LED, 0, 255, 0); // Green flash
       printScreen("RECEIVED PACKET", str, "RSSI: " + String(rssi) + " dBm");
       delay(150);

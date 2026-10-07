@@ -70,6 +70,13 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
   return { ...base, text: decodeText(bytes) };
 }
 
+/** The leader notifies these two bytes after a follower LoRa packet says OK. */
+export function isFollowerOkSignal(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const msg = text.trim().toUpperCase();
+  return msg === "OK" || msg.startsWith("OK ");
+}
+
 /** One notification, as the events the dashboard already understands. */
 export function eventsFromNotify(bytes: Uint8Array): BleEvent[] {
   const sample = parseLiveNotify(bytes);
