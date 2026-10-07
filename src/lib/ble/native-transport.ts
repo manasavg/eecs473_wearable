@@ -32,10 +32,10 @@ const DEVICE_ID_KEY = "excursion.nativeDeviceId";
 const DEVICE_NAME_KEY = "excursion.nativeDeviceName";
 
 const DISPLAY = {
-  scanning: "Looking for Leader_Device…",
+  scanning: `Looking for ${BLE_NAME_PREFIX}…`,
   cancel: "Cancel",
   availableDevices: "Beacons",
-  noDeviceFound: "No Leader_Device in range. Is the ESP32 advertising?",
+  noDeviceFound: `No ${BLE_NAME_PREFIX} in range. Is the ESP32 advertising?`,
 };
 
 export const NATIVE_BLE_TODO =
@@ -115,7 +115,7 @@ export class NativeBleTransport implements BleTransport {
   private listeners = new Set<(event: BleEvent) => void>();
   private central: NativeCentral | null = null;
   private deviceId: string | null = null;
-  private deviceName = "Leader_Device";
+  private deviceName = BLE_NAME_PREFIX;
   private writeTarget: { uuid: string; withoutResponse: boolean } | null = null;
   private wantLink = false;
   private reconnectsLeft = 0;
@@ -186,7 +186,7 @@ export class NativeBleTransport implements BleTransport {
 
   private async pickDevice(central: NativeCentral): Promise<NativeDevice> {
     // This sketch calls getAdvertising()->start() without addServiceUUID, so
-    // the packet only carries the name from BLEDevice::init("Leader_Device").
+    // the packet only carries the name from BLEDevice::init("Leader_Device_LoRa").
     return central.requestDevice({
       namePrefix: BLE_NAME_PREFIX,
       optionalServices: [LIVE_SERVICE_UUID],
@@ -197,12 +197,12 @@ export class NativeBleTransport implements BleTransport {
   private async savedDevice(central: NativeCentral): Promise<NativeDevice> {
     const deviceId = readStorage(DEVICE_ID_KEY);
     if (!deviceId) {
-      throw new Error("This phone has no saved beacon yet. Choose Leader_Device once.");
+      throw new Error(`This phone has no saved beacon yet. Choose ${BLE_NAME_PREFIX} once.`);
     }
     const found = await central.getDevices([deviceId]);
     const device = found.find((item) => item.deviceId === deviceId);
     if (!device) {
-      throw new Error("The saved beacon is not available. Choose Leader_Device from the list.");
+      throw new Error(`The saved beacon is not available. Choose ${BLE_NAME_PREFIX} from the list.`);
     }
     return device;
   }
@@ -210,7 +210,7 @@ export class NativeBleTransport implements BleTransport {
   private async open(central: NativeCentral, device: NativeDevice): Promise<void> {
     this.opening = true;
     this.deviceId = device.deviceId;
-    this.deviceName = device.name || readStorage(DEVICE_NAME_KEY) || "Leader_Device";
+    this.deviceName = device.name || readStorage(DEVICE_NAME_KEY) || BLE_NAME_PREFIX;
     try {
       // The sketch notifies a counter as soon as the link is up. Waiting on
       // descriptor discovery then hits the plugin's 10s "Connection timeout".
@@ -226,19 +226,19 @@ export class NativeBleTransport implements BleTransport {
       const service = services.find((item) => sameUuid(item.uuid, LIVE_SERVICE_UUID));
       if (!service) {
         throw new Error(
-          "The phone is connected, but the beacon does not expose 2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1.",
+          `The phone is connected, but the beacon does not expose ${LIVE_SERVICE_UUID}.`,
         );
       }
       const tx = service.characteristics.find((item) => sameUuid(item.uuid, LIVE_TX_UUID));
       if (!tx) {
         throw new Error(
-          "Leader_Device is missing the notify characteristic 812f1d0a-031f-4bf3-8c40-0c8f27971552.",
+          `${BLE_NAME_PREFIX} is missing the notify characteristic ${LIVE_TX_UUID}.`,
         );
       }
       const rx = service.characteristics.find((item) => sameUuid(item.uuid, LIVE_RX_UUID));
       if (!rx) {
         throw new Error(
-          "Leader_Device is missing the write characteristic 017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8.",
+          `${BLE_NAME_PREFIX} is missing the write characteristic ${LIVE_RX_UUID}.`,
         );
       }
       this.writeTarget = {
@@ -350,7 +350,7 @@ function explainBleError(error: unknown): Error {
   const message = error instanceof Error ? error.message : "Could not open the beacon.";
   if (/connection timeout/i.test(message)) {
     return new Error(
-      "The phone found Leader_Device, then the link timed out. Reset the ESP32, keep it next to the phone, and connect again.",
+      `The phone found ${BLE_NAME_PREFIX}, then the link timed out. Reset the ESP32, keep it next to the phone, and connect again.`,
     );
   }
   if (/unsupported/i.test(message)) {

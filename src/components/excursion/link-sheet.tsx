@@ -79,12 +79,12 @@ export function LinkSheet({
           <dl className="space-y-2 font-mono text-[11px] leading-relaxed break-all">
             <Uuid label="Service" value={LIVE_SERVICE_UUID} />
             <Uuid label="TX notify, one byte every 3 s" value={LIVE_TX_UUID} />
-            <Uuid label="RX write, printed on serial" value={LIVE_RX_UUID} />
+            <Uuid label="RX write, first byte 1 sends LoRa" value={LIVE_RX_UUID} />
           </dl>
           <p className="text-xs text-muted-foreground">
-            The sketch advertises the name Leader_Device and does not put the service UUID in
-            that packet. Notify is the TX characteristic. Check in writes the RX characteristic,
-            which prints Received Value.
+            The sketch advertises the name {BLE_NAME_PREFIX} and does not put the service UUID in
+            that packet. Notify is the TX characteristic. Check in writes the RX characteristic.
+            A first byte of 1 makes the board transmit LoRa “CHECK IN”.
           </p>
           <dl className="space-y-2 font-mono text-[11px] leading-relaxed break-all">
             <Uuid label="Leader, when added" value={LEADER_STATUS_UUID} />

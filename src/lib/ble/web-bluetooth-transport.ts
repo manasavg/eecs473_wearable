@@ -78,7 +78,7 @@ export class WebBluetoothTransport implements BleTransport {
       try {
         device = await navigator.bluetooth.requestDevice({
           // The sketch advertises the name only. It does not call addServiceUUID,
-          // so a service filter by itself would hide Leader_Device.
+          // so a service filter by itself would hide Leader_Device_LoRa.
           filters: [
             { namePrefix: BLE_NAME_PREFIX },
             ...(prefix === BLE_NAME_PREFIX ? [] : [{ namePrefix: prefix }]),
@@ -157,7 +157,7 @@ export class WebBluetoothTransport implements BleTransport {
       const server = await device.gatt.connect();
       const service = await server.getPrimaryService(LIVE_SERVICE_UUID).catch(() => {
         throw new Error(
-          "The device is connected, but it does not expose 2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1. That is the service in firmware/leader_device.",
+          `The device is connected, but it does not expose ${LIVE_SERVICE_UUID}. That is the service in firmware/leader_device.`,
         );
       });
 
@@ -286,7 +286,7 @@ async function characteristic(
     return await service.getCharacteristic(uuid);
   } catch {
     throw new Error(
-      `Leader_Device is missing the ${label} characteristic (${uuid}). That UUID is in firmware/leader_device.`,
+      `${BLE_NAME_PREFIX} is missing the ${label} characteristic (${uuid}). That UUID is in firmware/leader_device.`,
     );
   }
 }
@@ -304,7 +304,7 @@ async function optionalCharacteristic(
 
 function explainRequestError(error: unknown, prefix: string): string {
   if (error instanceof DOMException && error.name === "NotFoundError") {
-    return `No beacon chosen. If the list was empty, the ESP32 is not advertising as “${prefix}”. The sketch uses Leader_Device.`;
+    return `No beacon chosen. If the list was empty, the ESP32 is not advertising as “${prefix}”. The sketch uses ${BLE_NAME_PREFIX}.`;
   }
   if (error instanceof Error && error.message) return error.message;
   return "Could not open the Bluetooth chooser.";

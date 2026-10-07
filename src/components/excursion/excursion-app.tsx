@@ -5,6 +5,7 @@ import { Bluetooth, Moon, Sun, TriangleAlert, Volume2, VolumeX } from "lucide-re
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { BROADCAST_ID, THRESHOLD_MAX_M, THRESHOLD_MIN_M } from "@/lib/ble/constants";
+import { BLE_NAME_PREFIX } from "@/lib/ble/uuids";
 import { isNativeShell } from "@/lib/ble/create-transport";
 import { webBluetoothAvailable } from "@/lib/ble/web-bluetooth-transport";
 import { Status } from "@/lib/ble/types";
@@ -169,7 +170,7 @@ export function ExcursionApp() {
                 <h2 className="font-display text-2xl">Opening the beacon</h2>
                 <p className="mt-2 text-sm text-muted-foreground">
                   {state.mode === "beacon"
-                    ? "Choose Leader_Device in the Bluetooth list. That is the ESP32 clipped to this phone."
+                    ? `Choose ${BLE_NAME_PREFIX} in the Bluetooth list. That is the ESP32 clipped to this phone.`
                     : "Starting the demo group."}
                 </p>
               </section>
@@ -319,10 +320,10 @@ function Gate({
 
       <p className="max-w-prose text-sm text-muted-foreground">
         {nativeShell
-          ? "Connect looks for Leader_Device. iOS asks for Bluetooth permission the first time. The simulator has no radio, so this has to run on the phone."
+          ? `Connect looks for ${BLE_NAME_PREFIX}. iOS asks for Bluetooth permission the first time. The simulator has no radio, so this has to run on the phone.`
           : ble === false
             ? "Safari cannot open Bluetooth. Chrome on Android can. On an iPhone, build this project on a Mac with npm run cap:sync, then run it from Xcode. The demo group works in this browser."
-            : "Chrome will ask which Bluetooth device to use. Pick Leader_Device. That is the name in the ESP32 sketch."}
+            : `Chrome will ask which Bluetooth device to use. Pick ${BLE_NAME_PREFIX}. That is the name in the ESP32 sketch.`}
       </p>
     </main>
   );
@@ -342,7 +343,7 @@ function LiveLinkCard({
   return (
     <section className="rounded-3xl border bg-card px-5 py-5">
       <p className="text-[11px] tracking-[0.22em] text-muted-foreground uppercase">ESP32</p>
-      <h2 className="font-display text-2xl">{deviceName || "Leader_Device"}</h2>
+      <h2 className="font-display text-2xl">{deviceName || BLE_NAME_PREFIX}</h2>
       <p className="mt-3 font-mono text-5xl text-pine tabular-nums">
         {link?.counter == null ? "—" : link.counter.toLocaleString()}
       </p>
@@ -360,7 +361,7 @@ function LiveLinkCard({
         Check in
       </Button>
       <p className="mt-2 text-xs text-muted-foreground">
-        Writes a check-in to the RX characteristic. The sketch prints Received Value on the serial monitor.
+        Writes a check-in to the RX characteristic. The first byte is 1, so the board transmits LoRa “CHECK IN”.
       </p>
     </section>
   );

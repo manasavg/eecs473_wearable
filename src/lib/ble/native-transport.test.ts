@@ -25,7 +25,7 @@ class FakeCentral implements NativeCentral {
   async requestDevice(options?: { services?: string[]; namePrefix?: string }): Promise<{ deviceId: string; name?: string }> {
     this.requestCount += 1;
     this.requestOptions = options;
-    return { deviceId: "iphone-beacon", name: "Leader_Device" };
+    return { deviceId: "iphone-beacon", name: BLE_NAME_PREFIX };
   }
   async getDevices(deviceIds: string[]): Promise<{ deviceId: string; name?: string }[]> {
     return this.known.filter((device) => deviceIds.includes(device.deviceId));
@@ -118,10 +118,10 @@ describe("NativeBleTransport", () => {
     assert.deepEqual(central.subscribed, [LIVE_TX_UUID]);
     assert.equal(central.connectOptions?.skipDescriptorDiscovery, true);
     assert.equal(central.connectOptions?.timeout, 20000);
-    assert.equal(events.some((event) => event.type === "connected" && event.deviceName === "Leader_Device"), true);
+    assert.equal(events.some((event) => event.type === "connected" && event.deviceName === BLE_NAME_PREFIX), true);
     central.push(new Uint8Array([5]));
     assert.equal(events.some((event) => event.type === "live" && event.counter === 5), true);
-    assert.equal(rememberedNativeBeaconName(), "Leader_Device");
+    assert.equal(rememberedNativeBeaconName(), BLE_NAME_PREFIX);
 
     await link.writeCommand({ type: CmdType.CHECK_IN, targetId: 2, thresholdMeters: 0 });
     assert.deepEqual(central.writtenTo, [LIVE_RX_UUID]);
@@ -136,7 +136,7 @@ describe("NativeBleTransport", () => {
     await initial.disconnect();
 
     const central = new FakeCentral();
-    central.known = [{ deviceId: "iphone-beacon", name: "Leader_Device" }];
+    central.known = [{ deviceId: "iphone-beacon", name: BLE_NAME_PREFIX }];
     const link = new NativeBleTransport(central);
     const events = eventsOf(link);
     await link.connect(true);

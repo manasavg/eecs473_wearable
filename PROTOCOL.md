@@ -11,16 +11,17 @@ The app connects to it. Do not change these to open the link:
 
 | | |
 | --- | --- |
-| Advertised name | `Leader_Device` (the service UUID is not in the advertising packet) |
-| Service | `2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1` |
-| TX notify | `812f1d0a-031f-4bf3-8c40-0c8f27971552` |
-| RX write | `017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8` |
+| Advertised name | `Leader_Device_LoRa` (the service UUID is not in the advertising packet) |
+| Service | `20b723dd-215e-4424-bd75-746a902408bb` |
+| TX notify | `209989cd-1fc7-4eb1-979e-690ba55053da` |
+| RX write | `0be48bf3-86c4-4d13-8e2c-2ac0a569817c` |
 
 While the phone is connected, `loop()` notifies one `uint8` on TX every 3 seconds
 and increments it. The dashboard shows that counter. A 1-byte notification is
 that counter. A 4-byte notification is still read as a little-endian `uint32`.
 
-Check-ins are written to RX. `onWrite` prints `Received Value` and the bytes.
+Check-ins are written to RX. The packet starts with `1`. The sketch's `onWrite`
+checks that first byte and, when it is `1`, transmits LoRa `CHECK IN`.
 
 ## Wristband packets (next firmware)
 
@@ -35,14 +36,15 @@ flashed sketch.
 
 | Role | UUID |
 | --- | --- |
-| Service (already flashed) | `2b30c8ab-64a1-4c5d-a8fc-3089a210b8f1` |
-| Data (already flashed) | `017b6e07-c0b7-411a-8c8b-e54cb2fcf2b8` |
+| Service (already flashed) | `20b723dd-215e-4424-bd75-746a902408bb` |
+| RX write (already flashed) | `0be48bf3-86c4-4d13-8e2c-2ac0a569817c` |
+| TX notify (already flashed) | `209989cd-1fc7-4eb1-979e-690ba55053da` |
 | Leader status (read, notify) | `47300002-0000-4000-8000-657863757273` |
 | Follower status (notify) | `47300003-0000-4000-8000-657863757273` |
 | Alert (notify) | `47300004-0000-4000-8000-657863757273` |
 | Command (write or write-without-response) | `47300005-0000-4000-8000-657863757273` |
 
-Keep advertising `Leader_Device` and the service UUID already in the sketch.
+Keep advertising `Leader_Device_LoRa`. The service UUID is not in the advertising packet.
 The Beacon link sheet can override the name prefix on this phone only.
 
 Require LE Secure Connections with bonding so a nearby phone cannot write commands.

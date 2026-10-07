@@ -24,6 +24,15 @@ const sample: FollowerInfo = {
 };
 
 describe("command packets", () => {
+  it("starts a group check-in with 1 so the Heltec sketch sends LoRa CHECK IN", () => {
+    const bytes = encodeCommand({
+      type: CmdType.CHECK_IN,
+      targetId: BROADCAST_ID,
+      thresholdMeters: 0,
+    });
+    assert.equal(bytes[0], 1);
+  });
+
   it("encodes a check-in to wristband 2 as four bytes", () => {
     assert.deepEqual(
       [...encodeCommand({ type: CmdType.CHECK_IN, targetId: 2, thresholdMeters: 0 })],
