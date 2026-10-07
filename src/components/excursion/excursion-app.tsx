@@ -161,8 +161,20 @@ export function ExcursionApp() {
                 link={state.liveLink}
                 deviceName={state.deviceName}
                 linked={linked}
+                groupOkAt={state.groupOkAt}
                 onCheckIn={() => void app.checkIn(BROADCAST_ID)}
               />
+            )}
+
+            {state.groupOkAt != null && (
+              <section className="rounded-3xl border border-moss/40 bg-moss/10 px-5 py-6" role="status">
+                <p className="text-[11px] tracking-[0.22em] text-moss uppercase">Group</p>
+                <h2 className="font-display text-3xl text-moss">They're OK</h2>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Check-in reached {state.deviceName || BLE_NAME_PREFIX} at {formatClock(state.groupOkAt)}.
+                  The leader is sending CHECK IN over LoRa.
+                </p>
+              </section>
             )}
 
             {state.connection === "scanning" && state.members.length === 0 ? (
@@ -333,11 +345,13 @@ function LiveLinkCard({
   link,
   deviceName,
   linked,
+  groupOkAt,
   onCheckIn,
 }: {
   link: LiveLink | null;
   deviceName: string | null;
   linked: boolean;
+  groupOkAt: number | null;
   onCheckIn: () => void;
 }) {
   return (
@@ -361,7 +375,9 @@ function LiveLinkCard({
         Check in
       </Button>
       <p className="mt-2 text-xs text-muted-foreground">
-        Writes a check-in to the RX characteristic. The first byte is 1, so the board transmits LoRa “CHECK IN”.
+        {groupOkAt == null
+          ? "Writes a check-in to the leader. The first byte is 1, so the board transmits LoRa “CHECK IN” and the group shows OK."
+          : `They're OK as of ${formatClock(groupOkAt)}. Press again to send another check-in.`}
       </p>
     </section>
   );

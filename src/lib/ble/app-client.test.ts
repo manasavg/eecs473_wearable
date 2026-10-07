@@ -18,7 +18,10 @@ class ScriptedTransport implements BleTransport {
     this.listener?.({ type: "disconnected", unexpected: false });
   }
 
+  failWrite = false;
+
   async writeCommand(command: AppCommand): Promise<void> {
+    if (this.failWrite) throw new Error("Check-in did not reach the beacon.");
     this.commands.push(command);
   }
 
@@ -71,6 +74,29 @@ describe("ExcursionAppClient", () => {
     assert.equal(command?.type, CmdType.CHECK_IN);
     assert.equal(command?.targetId, BROADCAST_ID);
     assert.ok(client.getState().members.every((member) => member.checkInSentAt));
+    assert.ok(client.getState().members.every((member) => member.status === Status.OK));
+    assert.ok(client.getState().groupOkAt);
+    await client.disconnect();
+  });
+
+  it("shows the group OK after a check-in with no wearable id", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    await client.sendCheckIn(BROADCAST_ID);
+    assert.equal(client.getState().members.length, 0);
+    assert.ok(client.getState().groupOkAt);
+    assert.equal(client.getState().activity[0]?.kind, "checkin");
+    await client.disconnect();
+  });
+
+  it("does not mark the group OK when the write fails", async () => {
+    const transport = new ScriptedTransport();
+    transport.failWrite = true;
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    await assert.rejects(() => client.sendCheckIn(BROADCAST_ID), /did not reach/);
+    assert.equal(client.getState().groupOkAt, null);
     await client.disconnect();
   });
 

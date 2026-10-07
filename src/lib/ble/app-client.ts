@@ -88,6 +88,8 @@ export interface AppState {
   activity: ActivityEntry[];
   lastPacketAt: number | null;
   liveLink: LiveLink | null;
+  /** When a check-in write reached the leader. The group is OK. No wearable id. */
+  groupOkAt: number | null;
 }
 
 export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppState {
@@ -103,6 +105,7 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
     activity: [],
     lastPacketAt: null,
     liveLink: null,
+    groupOkAt: null,
   };
 }
 
@@ -210,25 +213,11 @@ export class ExcursionAppClient {
     }
   }
 
-  /** Appendix C: send_check_in. Pass BROADCAST_ID (0xFF) for the whole group. */
+  /** Appendix C: send_check_in. The Heltec leader treats this as the whole group. */
   async sendCheckIn(targetId: number): Promise<void> {
     if (!this.transport || this.state.connection !== "connected") {
       throw new Error("Connect the beacon before sending a check-in.");
     }
-    const now = Date.now();
-    const members = this.state.members.map((member) => {
-      const hit = targetId === BROADCAST_ID || member.deviceId === targetId;
-      return hit ? { ...member, checkInSentAt: now } : member;
-    });
-    this.commit(
-      { ...this.state, members },
-      {
-        id: nextId(),
-        at: now,
-        kind: "checkin",
-        deviceId: targetId === BROADCAST_ID ? undefined : targetId,
-      },
-    );
     try {
       await this.transport.writeCommand({
         type: CmdType.CHECK_IN,
@@ -243,6 +232,19 @@ export class ExcursionAppClient {
       );
       throw error instanceof Error ? error : new Error(message);
     }
+    const now = Date.now();
+    const everyone = targetId === BROADCAST_ID;
+    const members = this.state.members.map((member) => {
+      if (!everyone && member.deviceId !== targetId) return member;
+      return { ...member, status: Status.OK, checkInSentAt: now, pendingSince: null };
+    });
+    const alerts = everyone
+      ? []
+      : this.state.alerts.filter((alert) => alert.deviceId !== targetId);
+    this.commit(
+      { ...this.state, members, alerts, groupOkAt: now, error: null },
+      { id: nextId(), at: now, kind: "checkin" },
+    );
   }
 
   /** Appendix C: parse_data. One BLE notification in, one state update out. */

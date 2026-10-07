@@ -98,9 +98,7 @@ export function activityText(
     case "linked":
       return entry.message ? `Linked to ${entry.message}` : "Beacon linked";
     case "checkin":
-      return entry.deviceId == null
-        ? "Check-in sent to the whole group"
-        : `Check-in sent to ${nameFor(entry.deviceId)}`;
+      return "They're OK. Check-in reached the leader.";
     case "answered":
       return entry.deviceId == null ? "Check-in answered" : `${nameFor(entry.deviceId)} answered OK`;
     case "help":
