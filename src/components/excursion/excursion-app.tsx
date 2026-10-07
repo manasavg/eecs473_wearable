@@ -169,7 +169,7 @@ export function ExcursionApp() {
             {state.groupOkAt != null && (
               <section className="rounded-3xl border border-moss/40 bg-moss/10 px-5 py-6" role="status">
                 <p className="text-[11px] tracking-[0.22em] text-moss uppercase">Group</p>
-                <h2 className="font-display text-3xl text-moss">They're OK</h2>
+                <h2 className="font-display text-3xl text-moss">They&apos;re OK</h2>
                 <p className="mt-2 text-sm text-muted-foreground">
                   Check-in reached {state.deviceName || BLE_NAME_PREFIX} at {formatClock(state.groupOkAt)}.
                   The leader is sending CHECK IN over LoRa.

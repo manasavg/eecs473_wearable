@@ -107,7 +107,8 @@ if (text.includes(nameFilter)) {
   text = text.replace(nameFilter, nameFilterFixed);
 }
 
-text = text.replaceAll('resolvedName ?? "Unknown"', 'resolvedName ?? "Leader_Device"');
+text = text.replaceAll('resolvedName ?? "Unknown"', 'resolvedName ?? "Leader_Device_LoRa"');
+text = text.replaceAll('resolvedName ?? "Leader_Device"', 'resolvedName ?? "Leader_Device_LoRa"');
 
 writeFileSync(file, newline === "\r\n" ? text.replaceAll("\n", "\r\n") : text);
-console.log("Updated the iOS Bluetooth plugin so it can find Leader_Device.");
+console.log("Updated the iOS Bluetooth plugin so it can find Leader_Device_LoRa.");
