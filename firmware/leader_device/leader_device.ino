@@ -1,5 +1,3 @@
-#include <cmath>
-
 //BLE includes
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -60,7 +58,7 @@ void printScreen(String line1, String line2, String line3 = "") {
 
 // Helper function to transmit LoRa packet
 void sendLoRaMessage(String outgoingMsg) {
-  neopixelWrite(BOARD_LED, 0, 0, 255); // Blue flash
+  rgbLedWrite(BOARD_LED, 0, 0, 255); // Blue flash
 
   Serial.print("\n[Transmitting]: ");
   Serial.println(outgoingMsg);
@@ -80,7 +78,7 @@ void sendLoRaMessage(String outgoingMsg) {
     printScreen("TX FAILED!", "Code: " + String(txState));
   }
 
-  neopixelWrite(BOARD_LED, 0, 0, 0); // Turn off LED
+  rgbLedWrite(BOARD_LED, 0, 0, 0); // Turn off LED
   radio.startReceive();
 }
 
@@ -235,7 +233,6 @@ void loop() {
 
     if (radioState == RADIOLIB_ERR_NONE && str.length() > 0) {
       int rssi = radio.getRSSI();
-      int distance = pow(10, -rssi/(40));
 
       Serial.print("\n[Received]: \"");
       Serial.print(str);
@@ -254,10 +251,10 @@ void loop() {
         Serial.println("Phone notified: OK");
       }
 
-      neopixelWrite(BOARD_LED, 0, 255, 0); // Green flash
+      rgbLedWrite(BOARD_LED, 0, 255, 0); // Green flash
       printScreen("RECEIVED PACKET", str, "RSSI: " + String(rssi) + " dBm");
       delay(150);
-      neopixelWrite(BOARD_LED, 0, 0, 0);
+      rgbLedWrite(BOARD_LED, 0, 0, 0);
     }
 
     radio.startReceive();
