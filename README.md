@@ -1,146 +1,27 @@
-# Excursion — leader app
+# Excursion
 
-Phone dashboard for the Guided Excursion Wearable (EECS 473). One leader beacon
-clips to the back of the phone. Each hiker wears a wristband. This app shows
-distance, direction, battery, and status, and it sends check-ins. UWB covers
-about 40 m. LoRa check-ins cover about 1.5 km. The screen does not use a cell
-network.
+Leader phone app. Two radios, kept separate:
 
-The radios are not required to practice. **Practice with a demo group** stands in
-for wristbands. **Connect the beacon** opens the ESP32 sketch already running:
-it advertises the name `Leader_Device_LoRa` and notifies a one-byte counter every 3 seconds. **Check in** writes a packet whose first byte is 1, and the board then transmits LoRa `CHECK IN`. The phone shows **They're OK** only after a follower sends LoRa `OK` and the leader notifies that back.
+- **LoRa** is `firmware/leader_device/leader_device.ino` on the Heltec. The phone connects to it over Bluetooth (`Leader_Device_LoRa`). Check in writes a packet whose first byte is 1. The board sends LoRa `CHECK IN`. When a follower sends LoRa `OK`, the leader notifies the phone and the screen shows They're OK.
+- **UWB** is `firmware/uwb/anchor/anchor.ino` and `firmware/uwb/tag/tag.ino` on the DW1000 boards. They are not the Heltec. The anchor sends `DIST 12.34` from GPIO 17. Wire that pin to Heltec GPIO 47 RX, and connect the grounds. The Heltec forwards the meters to the phone.
 
-The big number on the beacon card is the DW1000 distance between the leader and the follower. The anchor (with the leader) sends `DIST 12.34` over UART to the Heltec. The Heltec notifies `D` plus the centimeters, and the phone shows meters. The tag sketch is unchanged.
-
-## Run it
+## Run
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open [http://127.0.0.1:4317](http://127.0.0.1:4317).
+Open http://127.0.0.1:4317.
+
+On the iPhone project that is already open: `git pull`, then `npm run cap:sync`, then Run in Xcode.
+
+## Flash
+
+1. Anchor: `firmware/uwb/anchor/anchor.ino`
+2. Leader: `firmware/leader_device/leader_device.ino`
+3. Tag: leave it if it already matches `firmware/uwb/tag/tag.ino`
 
 ```bash
 npm test
-npm run lint
 ```
-
-## What the leader can do
-
-- See every wristband: id, distance, bearing, battery, and status
-  (OK, check-in pending, Need Help, out of range).
-- See the beacon battery. The beacon has no LED for it.
-- Tap once to check in one person, or everyone (`0xFF`).
-- Watch a 60-second countdown while the wristband vibrates.
-- Set the separation line from 5 m to 40 m.
-- Get an alert when someone needs help, crosses the line, or loses UWB
-  (10 missed pings). One blocked ping does not alert.
-- Point the phone at the group. The arrow is relative to the phone.
-  The compass button adds a north mark from the magnetometer (stretch goal).
-- Rename wristbands on this phone only. Names are not sent to the beacon.
-
-Night colors are for the trail after dark. Alert sound can be muted. The phone
-still vibrates on an alert when the browser allows it.
-
-## Where the Bluetooth code goes
-
-Search the repo for `TODO(ble)`.
-
-| File | What you change |
-| --- | --- |
-| `firmware/leader_device/leader_device.ino` | Heltec sketch. Name `Leader_Device_LoRa`, TX notify, RX write that sends LoRa `CHECK IN`, UART distance from the anchor |
-| `firmware/uwb/anchor/anchor.ino` | DW1000 anchor. Same filter as the working sketch, plus `DIST` on GPIO 17 |
-| `firmware/uwb/tag/tag.ino` | DW1000 tag. The working sketch, unchanged |
-| `src/lib/ble/uuids.ts` | Those UUIDs, plus the wristband characteristics to add later |
-| `src/lib/ble/live-link.ts` | One-byte TX counter. Also accepts a 9-byte follower on that characteristic |
-| `src/lib/ble/protocol.ts` | Wristband byte codec. Flip `ANGLE_SIGN` if the BU04 angle runs the other way |
-| `src/lib/ble/web-bluetooth-transport.ts` | Chooser, notify, reconnect. Subscribes to extra characteristics only if they exist |
-| `src/lib/ble/native-transport.ts` | iPhone Core Bluetooth. Runs in the Capacitor app, not in Safari |
-| `src/lib/ble/create-transport.ts` | Switch that picks demo, Web Bluetooth, or native |
-| `src/lib/ble/ranging.ts` | Demo copy of the missed-ping and separation rules |
-| `PROTOCOL.md` | The contract to implement on the ESP32 |
-
-Chrome on Android (and desktop Chrome) connects to `Leader_Device_LoRa`. The Beacon
-link sheet can change the name prefix if a module advertises something else.
-
-The packet layout, including a known test vector, is in `PROTOCOL.md`.
-`npm test` locks that vector.
-
-## iPhone
-
-Safari cannot open the ESP32. The native transport is `src/lib/ble/native-transport.ts`.
-It uses Core Bluetooth through Capacitor, and it only runs inside the iOS app.
-Chrome on Android keeps using the website.
-
-Build that app on a Mac. Xcode and a real iPhone are required. The simulator
-has no Bluetooth radio.
-
-```bash
-npm install
-npx cap add ios
-```
-
-Open `ios/App/App/Info.plist` and add:
-
-```xml
-<key>NSBluetoothAlwaysUsageDescription</key>
-<string>Excursion connects to the Leader_Device_LoRa beacon.</string>
-```
-
-Without that key, iOS kills the app the first time it touches Bluetooth.
-
-```bash
-npm run cap:sync
-npx cap open ios
-```
-
-In Xcode, select your iPhone, trust the developer certificate, and run.
-**Connect the beacon** shows a list. Pick `Leader_Device_LoRa`. The counter on
-the dashboard is the `uint8` the ESP32 notifies every 3 seconds.
-
-The sketch does not put the service UUID in the advertising packet. The phone
-scans for the name `Leader_Device_LoRa`, then opens service
-`20b723dd-215e-4424-bd75-746a902408bb`. Notify is
-`209989cd-1fc7-4eb1-979e-690ba55053da`. Check in writes
-`0be48bf3-86c4-4d13-8e2c-2ac0a569817c`. The first byte is 1, so the board
-transmits LoRa `CHECK IN`.
-
-## Leader to follower distance
-
-Reflash two boards, then rebuild the phone. The tag can stay as it is if it
-already matches `firmware/uwb/tag/tag.ino` (channel 2, same mode).
-
-1. Flash `firmware/uwb/anchor/anchor.ino` on the DW1000 anchor.
-2. Flash `firmware/leader_device/leader_device.ino` on the Heltec leader.
-   Upload that file, including on a copy that lives outside this repo.
-3. Wire anchor GPIO 17 TX to Heltec GPIO 47 RX. Connect GND to GND.
-4. On the Mac, in the already-open project: `git pull`, then `npm run cap:sync`,
-   then press Run in Xcode.
-
-The anchor serial monitor still prints `avg=12.34`. The same number leaves on
-UART as `DIST 12.34`. The Heltec serial monitor prints `Phone notified distance`.
-The phone shows that range in meters, to two decimals. It stays blank until the
-anchor has a filtered average, which is about every 2 seconds once the tag is
-in range. A counter notify does not clear it.
-
-`npm run dev` is still the browser app. `npm run cap:sync` rebuilds the
-static site and copies it into the Xcode project.
-
-## Demo trail
-
-Field test, after you open the demo group, stands in for hardware:
-
-- Hold Sync assigns wristbands 1 and 2. Forget wristbands clears them.
-- Distance steps, one missed UWB ping, and a full UWB loss.
-- Trip separation alert. At a 40 m line this is the 10-ping loss, because UWB
-  does not return a distance past its ceiling. Lower the line to see a fix
-  that is still on the dial.
-- 3-second press sends Need Help. The response button sends I'm OK.
-- Drift walks the group a little every 2-second cycle.
-
-## Stack
-
-Next.js, TypeScript, Tailwind, shadcn/ui. State lives in `ExcursionAppClient`
-(`src/lib/ble/app-client.ts`), which mirrors the `App` class in the proposal:
-connect, parse, check-in, alert, update UI.

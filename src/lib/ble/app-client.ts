@@ -1,6 +1,5 @@
-import { BROADCAST_ID, CHECKIN_VIBRATE_MS, DEFAULT_THRESHOLD_M } from "./constants";
+import { BROADCAST_ID, DEFAULT_THRESHOLD_M } from "./constants";
 import { createTransport, type LinkMode } from "./create-transport";
-import { MockTrailTransport, type DemoControls } from "./mock-transport";
 import { isFollowerOkSignal } from "./live-link";
 import { clampThreshold } from "./protocol";
 import type { BleEvent, BleTransport } from "./transport";
@@ -138,10 +137,6 @@ export class ExcursionAppClient {
     return this.state;
   }
 
-  demo(): DemoControls | null {
-    return this.transport instanceof MockTrailTransport ? this.transport : null;
-  }
-
   /**
    * Appendix C: connect_device.
    * Pass a transport only from tests. The click handler must call this
@@ -264,7 +259,6 @@ export class ExcursionAppClient {
             message: event.deviceName,
           },
         );
-        await this.pushThresholdSilent();
         return;
       case "disconnected":
         if (this.closing || !event.unexpected) return;
@@ -420,20 +414,6 @@ export class ExcursionAppClient {
     }
   }
 
-  private async pushThresholdSilent(): Promise<void> {
-    if (!this.transport || this.state.connection !== "connected") return;
-    try {
-      await this.transport.writeCommand({
-        type: CmdType.SET_THRESHOLD,
-        targetId: BROADCAST_ID,
-        thresholdMeters: this.state.thresholdMeters,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not send the separation line.";
-      this.commit({ ...this.state, error: message });
-    }
-  }
-
   private release(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -446,10 +426,6 @@ export class ExcursionAppClient {
       : next;
     for (const listener of this.listeners) listener(this.state);
   }
-}
-
-export function checkInSecondsLeft(sentAt: number, now: number): number {
-  return Math.max(0, Math.ceil((CHECKIN_VIBRATE_MS - (now - sentAt)) / 1000));
 }
 
 function nextId(): string {

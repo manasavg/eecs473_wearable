@@ -1,3 +1,7 @@
+// Heltec V4: LoRa and BLE only.
+// UWB ranging runs on the separate DW1000 boards (firmware/uwb).
+// This sketch reads "DIST 12.34" from the anchor UART and notifies the phone.
+
 //BLE includes
 #include <BLEDevice.h>
 #include <BLEServer.h>

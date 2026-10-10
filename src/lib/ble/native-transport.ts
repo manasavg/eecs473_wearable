@@ -38,9 +38,6 @@ const DISPLAY = {
   noDeviceFound: `No ${BLE_NAME_PREFIX} in range. Is the ESP32 advertising?`,
 };
 
-export const NATIVE_BLE_TODO =
-  "iPhone Bluetooth lives in src/lib/ble/native-transport.ts. It runs in the Capacitor app, not in Safari. On a Mac: npm run cap:sync, then npx cap open ios.";
-
 interface GattProperties {
   read: boolean;
   write: boolean;

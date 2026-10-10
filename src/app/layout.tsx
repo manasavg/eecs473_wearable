@@ -1,27 +1,9 @@
 import type { Metadata, Viewport } from "next";
-import { Fraunces, Geist_Mono, Outfit } from "next/font/google";
-import { Toaster } from "sonner";
 import "./globals.css";
 
-const outfit = Outfit({
-  variable: "--font-outfit",
-  subsets: ["latin"],
-});
-
-const fraunces = Fraunces({
-  variable: "--font-fraunces",
-  subsets: ["latin"],
-});
-
-const mono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
 export const metadata: Metadata = {
-  title: "Excursion — Leader",
-  description:
-    "Leader beacon dashboard for the Guided Excursion Wearable. Distance, direction, battery, and check-ins without cell service.",
+  title: "Excursion",
+  description: "LoRa check-in and UWB distance for the leader phone.",
   applicationName: "Excursion",
   appleWebApp: {
     capable: true,
@@ -31,7 +13,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#234037",
+  themeColor: "#ffffff",
   width: "device-width",
   initialScale: 1,
 };
@@ -42,17 +24,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${outfit.variable} ${fraunces.variable} ${mono.variable}`}
-      // The phone preview stamps __gcrremoteframetoken on <html> before React hydrates.
-      // Without this, that extra attribute aborts the whole page.
-      suppressHydrationWarning
-    >
-      <body className="antialiased" suppressHydrationWarning>
-        {children}
-        <Toaster position="top-center" />
-      </body>
+    <html lang="en" suppressHydrationWarning>
+      <body suppressHydrationWarning>{children}</body>
     </html>
   );
 }

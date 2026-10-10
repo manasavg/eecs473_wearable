@@ -4,14 +4,13 @@ export const dynamic = "force-static";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Excursion Leader",
+    name: "Excursion",
     short_name: "Excursion",
-    description:
-      "Leader beacon dashboard for the Guided Excursion Wearable. Distance, direction, and check-ins without cell service.",
+    description: "LoRa check-in and UWB distance for the leader phone.",
     start_url: "/",
     display: "standalone",
-    background_color: "#f4f0e6",
-    theme_color: "#234037",
+    background_color: "#ffffff",
+    theme_color: "#111111",
     icons: [{ src: "/icon.svg", sizes: "any", type: "image/svg+xml" }],
   };
 }
