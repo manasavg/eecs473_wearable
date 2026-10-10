@@ -37,7 +37,7 @@
 #define BTN_CHECKIN_PIN 4   // Button 1: Sends "CHECK IN"
 #define BTN_OK_PIN      6   // Button 2: Sends "OK"
 
-// UWB anchor UART. Wire anchor TX (GPIO 17) to UWB_RX_PIN, and GND to GND.
+// UWB anchor is an Arduino Uno. Its pin 9 TX wires to UWB_RX_PIN. GND to GND. 9600 baud.
 // UWB_TX_PIN is unused. Do not wire it. IRQ on the DW1000 stays off this board
 // because GPIO 2 is already FEM_EN.
 #define UWB_RX_PIN      47
@@ -234,10 +234,10 @@ void setup() {
 
   // 4. SERIAL
   Serial.begin(115200);
-  Serial2.begin(115200, SERIAL_8N1, UWB_RX_PIN, UWB_TX_PIN);
+  Serial2.begin(9600, SERIAL_8N1, UWB_RX_PIN, UWB_TX_PIN);
   delay(500);
   Serial.println("\n--- HELTEC V4 LORA NODE STARTUP & BLE! ---");
-  Serial.println("UWB distance UART is Serial2 RX GPIO 47 at 115200.");
+  Serial.println("UWB distance UART is Serial2 RX GPIO 47 at 9600.");
 
   //BLE setup
   //---------------------------------------------------------------------------------------------------

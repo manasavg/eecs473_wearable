@@ -23,9 +23,9 @@ TX also sends one counter byte every 3 seconds. That byte is the link heartbeat.
 
 `firmware/uwb/anchor/anchor.ino` and `firmware/uwb/tag/tag.ino`
 
-Channel 2, `MODE_LONGDATA_RANGE_ACCURACY`. The anchor prints a filtered average every 2 seconds and writes `DIST 12.34` on Serial2, GPIO 17 TX.
+Channel 2, `MODE_LONGDATA_RANGE_ACCURACY`. The anchor is an Arduino Uno. It prints a filtered average every 2 seconds and writes `DIST 12.34` at 9600 from pin 9 (SoftwareSerial). Uno pin 0/1 stay the USB serial monitor.
 
-Heltec Serial2 RX is GPIO 47, 115200 8N1. Share ground. The Heltec then notifies 3 bytes on TX:
+Heltec Serial2 RX is GPIO 47, 9600 8N1. Share ground. The Heltec then notifies 3 bytes on TX:
 
 | Offset | Meaning |
 | --- | --- |
