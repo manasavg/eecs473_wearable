@@ -3,8 +3,9 @@
  * Channel 2, range filter, outlier rejection, rolling average printed every 2 s.
  * Flash the matching tag sketch on the other board (same mode and channel).
  *
- * Also sends the filtered average to the Heltec leader over UART:
- *   this board GPIO 17 TX -> Heltec GPIO 47 RX
+ * Also sends the filtered average to the Heltec leader over UART at 9600:
+ *   ESP32 / ESP32-C3 / ESP32-S3: GPIO 17 TX -> Heltec GPIO 47 RX
+ *   Arduino Uno / Nano: pin 9 TX -> Heltec GPIO 47 RX
  *   GND -> GND
  * Line format: DIST 12.34
  * The leader notifies that range to the phone. Leave the tag sketch as-is.
@@ -17,9 +18,30 @@ const uint8_t PIN_RST = 7; // reset pin
 const uint8_t PIN_IRQ = 2; // irq pin
 const uint8_t PIN_SS = SS; // spi select pin
 
-// UART to the Heltec. Change DIST_TX_PIN if GPIO 17 is already used on this board.
-const int DIST_TX_PIN = 17;
+// Serial2 is only on some ESP32 boards (not the C3). Use UART1 there, SoftwareSerial elsewhere.
+#if defined(ESP32)
 const int DIST_RX_PIN = 16; // unused, leave open
+const int DIST_TX_PIN = 17; // wire to Heltec GPIO 47
+void distBegin() {
+  Serial1.begin(9600, SERIAL_8N1, DIST_RX_PIN, DIST_TX_PIN);
+}
+void distSend(float meters) {
+  Serial1.print(F("DIST "));
+  Serial1.println(meters, 2);
+}
+#else
+#include <SoftwareSerial.h>
+const int DIST_RX_PIN = 8;  // unused, leave open
+const int DIST_TX_PIN = 9;  // wire to Heltec GPIO 47
+SoftwareSerial DistSerial(DIST_RX_PIN, DIST_TX_PIN);
+void distBegin() {
+  DistSerial.begin(9600);
+}
+void distSend(float meters) {
+  DistSerial.print(F("DIST "));
+  DistSerial.println(meters, 2);
+}
+#endif
 
 // ---- tuning ----
 const float RANGE_CORRECTION = 0.0;      // meters added to every reading (fixed offset fix)
@@ -39,7 +61,7 @@ unsigned long lastPrint = 0;
 
 void setup() {
   Serial.begin(115200);
-  Serial2.begin(115200, SERIAL_8N1, DIST_RX_PIN, DIST_TX_PIN);
+  distBegin();
   delay(1000);
   DW1000Ranging.initCommunication(PIN_RST, PIN_SS, PIN_IRQ); //Reset, CS, IRQ pin
 
@@ -114,8 +136,7 @@ void report() {
     if (rxN) Serial.print(rxSum / rxN, 1); else Serial.print(F("n/a"));
     Serial.print(F(" dBm  ok=")); Serial.print(acceptedSincePrint);
     Serial.print(F(" rej=")); Serial.println(rejectedSincePrint);
-    Serial2.print(F("DIST "));
-    Serial2.println(avg, 2);
+    distSend(avg);
   }
   acceptedSincePrint = 0; rejectedSincePrint = 0; rxSum = 0; rxN = 0;
 }

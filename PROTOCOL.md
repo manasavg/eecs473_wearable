@@ -23,9 +23,9 @@ TX also sends one counter byte every 3 seconds. That byte is the link heartbeat.
 
 `firmware/uwb/anchor/anchor.ino` and `firmware/uwb/tag/tag.ino`
 
-Channel 2, `MODE_LONGDATA_RANGE_ACCURACY`. The anchor prints a filtered average every 2 seconds and writes `DIST 12.34` on Serial2, GPIO 17 TX.
+Channel 2, `MODE_LONGDATA_RANGE_ACCURACY`. The anchor prints a filtered average every 2 seconds and writes `DIST 12.34` at 9600. ESP32 boards send it on GPIO 17 (UART1, because `Serial2` is not present on every ESP32). Uno and Nano send it on pin 9.
 
-Heltec Serial2 RX is GPIO 47, 115200 8N1. Share ground. The Heltec then notifies 3 bytes on TX:
+Heltec Serial2 RX is GPIO 47, 9600 8N1. Share ground. The Heltec then notifies 3 bytes on TX:
 
 | Offset | Meaning |
 | --- | --- |
