@@ -11,7 +11,9 @@ import type { FollowerInfo } from "./types";
 /**
  * Bytes from the ESP32 sketch in firmware/leader_device/leader_device.ino.
  *
- * The TX characteristic notifies one uint8 every 3 seconds:
+ * The TX characteristic notifies one uint8 every 3 seconds, and a 3-byte
+ * distance packet (`D` + uint16 centimeters, little-endian) when the UWB
+ * anchor reports a filtered range:
  *
  *   pTxCharacteristic->setValue(&txValue, 1);
  *   pTxCharacteristic->notify();
@@ -31,6 +33,8 @@ export interface LiveNotify {
   hex: string;
   follower: FollowerInfo | null;
   leaderBattery: number | null;
+  /** Meters between the UWB anchor and tag, when this notify is a distance packet. */
+  distanceM: number | null;
 }
 
 export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
@@ -41,6 +45,7 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
     hex,
     follower: null,
     leaderBattery: null,
+    distanceM: null,
   };
 
   if (bytes.length === 1) {
@@ -57,6 +62,13 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
     } catch {
       /* not a follower; try the other shapes below */
     }
+  }
+
+  // 'D' + uint16 centimeters, little-endian. The leader sends this when the
+  // UWB anchor reports a filtered range.
+  if (bytes.length === 3 && bytes[0] === 0x44) {
+    const cm = bytes[1] | (bytes[2] << 8);
+    return { ...base, distanceM: cm / 100 };
   }
 
   if (bytes.length === LEADER_PACKET_BYTES && bytes[0] === PACKET_VERSION) {
@@ -91,6 +103,7 @@ export function eventsFromNotify(bytes: Uint8Array): BleEvent[] {
     counter: sample.counter,
     text: sample.text,
     hex: sample.hex,
+    distanceM: sample.distanceM,
   });
   return events;
 }

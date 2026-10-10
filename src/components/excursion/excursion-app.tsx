@@ -9,7 +9,7 @@ import { BLE_NAME_PREFIX } from "@/lib/ble/uuids";
 import { isNativeShell } from "@/lib/ble/create-transport";
 import { webBluetoothAvailable } from "@/lib/ble/web-bluetooth-transport";
 import { Status } from "@/lib/ble/types";
-import { activityText, batteryBand, formatAge, formatClock, statusLabel } from "@/lib/format";
+import { activityText, batteryBand, formatAge, formatClock, formatUwbDistance, statusLabel } from "@/lib/format";
 import type { ActivityEntry, LiveLink } from "@/lib/ble/app-client";
 import { cn } from "@/lib/utils";
 import { CompassDial } from "./compass-dial";
@@ -163,6 +163,7 @@ export function ExcursionApp() {
                 linked={linked}
                 groupCheckInAt={state.groupCheckInAt}
                 groupOkAt={state.groupOkAt}
+                uwbDistanceM={state.uwbDistanceM}
                 onCheckIn={() => void app.checkIn(BROADCAST_ID)}
               />
             )}
@@ -357,6 +358,7 @@ function LiveLinkCard({
   linked,
   groupCheckInAt,
   groupOkAt,
+  uwbDistanceM,
   onCheckIn,
 }: {
   link: LiveLink | null;
@@ -364,19 +366,23 @@ function LiveLinkCard({
   linked: boolean;
   groupCheckInAt: number | null;
   groupOkAt: number | null;
+  uwbDistanceM: number | null;
   onCheckIn: () => void;
 }) {
   return (
     <section className="rounded-3xl border bg-card px-5 py-5">
-      <p className="text-[11px] tracking-[0.22em] text-muted-foreground uppercase">ESP32</p>
+      <p className="text-[11px] tracking-[0.22em] text-muted-foreground uppercase">Leader to follower</p>
       <h2 className="font-display text-2xl">{deviceName || BLE_NAME_PREFIX}</h2>
-      <p className="mt-3 font-mono text-5xl text-pine tabular-nums">
-        {link?.counter == null ? "—" : link.counter.toLocaleString()}
-      </p>
+      <p className="mt-3 font-mono text-5xl text-pine tabular-nums">{formatUwbDistance(uwbDistanceM)}</p>
       <p className="mt-1 text-sm text-muted-foreground">
-        Counter from the beacon. The sketch adds one and notifies one byte every 3 seconds.
+        {uwbDistanceM == null
+          ? "UWB distance shows here after the anchor has a filtered average. That update arrives about every 2 seconds."
+          : "Filtered DW1000 range between the leader anchor and the follower tag."}
+      </p>
+      <p className="mt-4 font-mono text-sm text-muted-foreground tabular-nums">
+        Counter {link?.counter == null ? "—" : link.counter.toLocaleString()}
         {link && link.packetCount > 0
-          ? ` ${link.packetCount} packet${link.packetCount === 1 ? "" : "s"} on this link.`
+          ? ` · ${link.packetCount} packet${link.packetCount === 1 ? "" : "s"}`
           : ""}
       </p>
       {link?.text && <p className="mt-3 text-sm">{link.text}</p>}

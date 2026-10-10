@@ -93,6 +93,8 @@ export interface AppState {
   groupCheckInAt: number | null;
   /** When the leader notified that a follower pressed OK. No wearable id. */
   groupOkAt: number | null;
+  /** Latest filtered UWB range between the leader anchor and the follower tag. */
+  uwbDistanceM: number | null;
 }
 
 export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppState {
@@ -110,6 +112,7 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
     liveLink: null,
     groupCheckInAt: null,
     groupOkAt: null,
+    uwbDistanceM: null,
   };
 }
 
@@ -302,11 +305,14 @@ export class ExcursionAppClient {
       case "live": {
         const now = Date.now();
         const followerOk = isFollowerOkSignal(event.text);
+        const distance =
+          event.distanceM != null && Number.isFinite(event.distanceM) ? event.distanceM : null;
         this.commit(
           {
             ...this.state,
             lastPacketAt: now,
             groupOkAt: followerOk ? now : this.state.groupOkAt,
+            uwbDistanceM: distance ?? this.state.uwbDistanceM,
             liveLink: {
               counter: event.counter ?? this.state.liveLink?.counter ?? null,
               text: event.text ?? this.state.liveLink?.text ?? null,

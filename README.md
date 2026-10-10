@@ -10,6 +10,8 @@ The radios are not required to practice. **Practice with a demo group** stands i
 for wristbands. **Connect the beacon** opens the ESP32 sketch already running:
 it advertises the name `Leader_Device_LoRa` and notifies a one-byte counter every 3 seconds. **Check in** writes a packet whose first byte is 1, and the board then transmits LoRa `CHECK IN`. The phone shows **They're OK** only after a follower sends LoRa `OK` and the leader notifies that back.
 
+The big number on the beacon card is the DW1000 distance between the leader and the follower. The anchor (with the leader) sends `DIST 12.34` over UART to the Heltec. The Heltec notifies `D` plus the centimeters, and the phone shows meters. The tag sketch is unchanged.
+
 ## Run it
 
 ```bash
@@ -47,7 +49,9 @@ Search the repo for `TODO(ble)`.
 
 | File | What you change |
 | --- | --- |
-| `firmware/leader_device/leader_device.ino` | Heltec sketch. Name `Leader_Device_LoRa`, TX notify, RX write that sends LoRa `CHECK IN` |
+| `firmware/leader_device/leader_device.ino` | Heltec sketch. Name `Leader_Device_LoRa`, TX notify, RX write that sends LoRa `CHECK IN`, UART distance from the anchor |
+| `firmware/uwb/anchor/anchor.ino` | DW1000 anchor. Same filter as the working sketch, plus `DIST` on GPIO 17 |
+| `firmware/uwb/tag/tag.ino` | DW1000 tag. The working sketch, unchanged |
 | `src/lib/ble/uuids.ts` | Those UUIDs, plus the wristband characteristics to add later |
 | `src/lib/ble/live-link.ts` | One-byte TX counter. Also accepts a 9-byte follower on that characteristic |
 | `src/lib/ble/protocol.ts` | Wristband byte codec. Flip `ANGLE_SIGN` if the BU04 angle runs the other way |
@@ -101,6 +105,24 @@ scans for the name `Leader_Device_LoRa`, then opens service
 `209989cd-1fc7-4eb1-979e-690ba55053da`. Check in writes
 `0be48bf3-86c4-4d13-8e2c-2ac0a569817c`. The first byte is 1, so the board
 transmits LoRa `CHECK IN`.
+
+## Leader to follower distance
+
+Reflash two boards, then rebuild the phone. The tag can stay as it is if it
+already matches `firmware/uwb/tag/tag.ino` (channel 2, same mode).
+
+1. Flash `firmware/uwb/anchor/anchor.ino` on the DW1000 anchor.
+2. Flash `firmware/leader_device/leader_device.ino` on the Heltec leader.
+   Upload that file, including on a copy that lives outside this repo.
+3. Wire anchor GPIO 17 TX to Heltec GPIO 47 RX. Connect GND to GND.
+4. On the Mac, in the already-open project: `git pull`, then `npm run cap:sync`,
+   then press Run in Xcode.
+
+The anchor serial monitor still prints `avg=12.34`. The same number leaves on
+UART as `DIST 12.34`. The Heltec serial monitor prints `Phone notified distance`.
+The phone shows that range in meters, to two decimals. It stays blank until the
+anchor has a filtered average, which is about every 2 seconds once the tag is
+in range. A counter notify does not clear it.
 
 `npm run dev` is still the browser app. `npm run cap:sync` rebuilds the
 static site and copies it into the Xcode project.

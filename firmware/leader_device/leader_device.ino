@@ -33,12 +33,21 @@
 #define BTN_CHECKIN_PIN 4   // Button 1: Sends "CHECK IN"
 #define BTN_OK_PIN      6   // Button 2: Sends "OK"
 
+// UWB anchor UART. Wire anchor TX (GPIO 17) to UWB_RX_PIN, and GND to GND.
+// UWB_TX_PIN is unused. Do not wire it. IRQ on the DW1000 stays off this board
+// because GPIO 2 is already FEM_EN.
+#define UWB_RX_PIN      47
+#define UWB_TX_PIN      48
+
 // Debounce timing
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 250; // ms
 
 bool check = false;
 int i = 0;
+String uwbLine;
+unsigned long lastNotifyMs = 0;
+const unsigned long NOTIFY_MS = 3000;
 
 // Screen Initialization (U8x8 Non-blocking driver)
 U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(OLED_SCL, OLED_SDA, OLED_RST);
@@ -131,6 +140,70 @@ class MyCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
+// 'D' + uint16 centimeters, little-endian, on the TX characteristic.
+void notifyDistanceMeters(float meters) {
+  if (!deviceConnected || pTxCharacteristic == NULL) return;
+  if (meters < 0.0f || meters > 100.0f) return;
+  uint16_t cm = (uint16_t)(meters * 100.0f + 0.5f);
+  uint8_t pkt[3];
+  pkt[0] = 'D';
+  pkt[1] = (uint8_t)(cm & 0xFF);
+  pkt[2] = (uint8_t)((cm >> 8) & 0xFF);
+  pTxCharacteristic->setValue(pkt, 3);
+  pTxCharacteristic->notify();
+  Serial.print("Phone notified distance: ");
+  Serial.print(meters, 2);
+  Serial.println(" m");
+  printScreen("UWB DISTANCE", String(meters, 2) + " m");
+}
+
+bool distanceFromText(String msg, float *meters) {
+  msg.trim();
+  int start = -1;
+  if (msg.startsWith("DIST ") || msg.startsWith("dist ")) {
+    start = 5;
+  } else {
+    int at = msg.indexOf("avg=");
+    if (at < 0) at = msg.indexOf("AVG=");
+    if (at >= 0) start = at + 4;
+  }
+  if (start < 0 || start >= (int)msg.length()) return false;
+  bool digit = false;
+  for (int k = start; k < (int)msg.length(); k++) {
+    char c = msg[k];
+    if (c >= '0' && c <= '9') {
+      digit = true;
+      break;
+    }
+    if (c != ' ' && c != '.' && c != '-' && c != '+') break;
+  }
+  if (!digit) return false;
+  *meters = msg.substring(start).toFloat();
+  return true;
+}
+
+void handleDistanceText(String msg) {
+  float meters = 0;
+  if (!distanceFromText(msg, &meters)) return;
+  notifyDistanceMeters(meters);
+}
+
+void pollUwbUart() {
+  while (Serial2.available() > 0) {
+    char c = (char)Serial2.read();
+    if (c == '\n' || c == '\r') {
+      if (uwbLine.length() > 0) {
+        handleDistanceText(uwbLine);
+        uwbLine = "";
+      }
+    } else if (uwbLine.length() < 80) {
+      uwbLine += c;
+    } else {
+      uwbLine = "";
+    }
+  }
+}
+
 void setup() {
 
   //LoRa setup
@@ -157,8 +230,10 @@ void setup() {
 
   // 4. SERIAL
   Serial.begin(115200);
+  Serial2.begin(115200, SERIAL_8N1, UWB_RX_PIN, UWB_TX_PIN);
   delay(500);
   Serial.println("\n--- HELTEC V4 LORA NODE STARTUP & BLE! ---");
+  Serial.println("UWB distance UART is Serial2 RX GPIO 47 at 115200.");
 
   //BLE setup
   //---------------------------------------------------------------------------------------------------
@@ -225,6 +300,7 @@ void setup() {
 }
 
 void loop() {
+  pollUwbUart();
 
   // 1. RECEIVE INCOMING LORA MESSAGES
   if (digitalRead(LORA_DIO1) == HIGH) {
@@ -250,6 +326,7 @@ void loop() {
         pTxCharacteristic->notify();
         Serial.println("Phone notified: OK");
       }
+      handleDistanceText(msg);
 
       rgbLedWrite(BOARD_LED, 0, 255, 0); // Green flash
       printScreen("RECEIVED PACKET", str, "RSSI: " + String(rssi) + " dBm");
@@ -282,13 +359,13 @@ void loop() {
 
   delay(10);
 
-  if (deviceConnected) {
+  if (deviceConnected && millis() - lastNotifyMs >= NOTIFY_MS) {
+    lastNotifyMs = millis();
     Serial.print("Notifying Value: ");
     Serial.println(txValue);
     pTxCharacteristic->setValue(&txValue, 1);
     pTxCharacteristic->notify();
     txValue++;
-    delay(3000);  // Notifying every 1 second
   }
 
   // disconnecting

@@ -25,6 +25,31 @@ checks that first byte and, when it is `1`, transmits LoRa `CHECK IN`. The phone
 stays on "Waiting for OK" until a follower sends LoRa `OK`. The leader then
 notifies the two bytes `OK` on TX, and the phone shows the group as OK.
 
+## UWB distance
+
+The DW1000 boards are separate from the Heltec. GPIO 2 on the Heltec is the LoRa
+front-end enable, and the DW1000 uses that pin as IRQ, so the radios stay on
+their own boards.
+
+| Board | Sketch | Role |
+| --- | --- | --- |
+| Anchor, with the leader | `firmware/uwb/anchor/anchor.ino` | Same ranging sketch, plus UART `DIST 12.34` every 2 s |
+| Tag, with the follower | `firmware/uwb/tag/tag.ino` | The working tag sketch, unchanged |
+| Heltec | `firmware/leader_device/leader_device.ino` | Reads that line and notifies the phone |
+
+Wire anchor GPIO 17 TX to Heltec GPIO 47 RX, and connect the grounds. 115200 8N1.
+The Heltec also accepts a LoRa line that starts with `DIST ` or contains `avg=`.
+
+The phone packet on TX is 3 bytes:
+
+| Offset | Type | Meaning |
+| --- | --- | --- |
+| 0 | uint8 | `D` (`0x44`) |
+| 1 | uint16 LE | centimeters, 0 to 10000 |
+
+`12.34 m` is `44 d2 04`. A 1-byte counter and the 2-byte `OK` stay what they were.
+The dashboard keeps the last distance when a later notify is only the counter.
+
 ## Wristband packets (next firmware)
 
 Bytes below are little-endian. Every structured packet starts with a version byte

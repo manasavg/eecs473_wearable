@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { isFollowerOkSignal, parseLiveNotify } from "./live-link.ts";
+import { eventsFromNotify, isFollowerOkSignal, parseLiveNotify } from "./live-link.ts";
 import { encodeFollower, encodeLeader } from "./protocol.ts";
 import { Status, type FollowerInfo } from "./types.ts";
 
@@ -70,5 +70,24 @@ describe("parseLiveNotify", () => {
   it("decodes a 3-byte leader battery packet", () => {
     const sample = parseLiveNotify(encodeLeader({ batteryPercent: 86 }));
     assert.equal(sample.leaderBattery, 86);
+    assert.equal(sample.distanceM, null);
+  });
+
+  it("reads the 3-byte UWB distance the leader notifies", () => {
+    const sample = parseLiveNotify(new Uint8Array([0x44, 0xd2, 0x04]));
+    assert.equal(sample.distanceM, 12.34);
+    assert.equal(sample.counter, null);
+    assert.equal(sample.text, null);
+    assert.equal(sample.leaderBattery, null);
+    assert.equal(sample.follower, null);
+    const [event] = eventsFromNotify(new Uint8Array([0x44, 0xd2, 0x04]));
+    assert.equal(event.type, "live");
+    if (event.type === "live") assert.equal(event.distanceM, 12.34);
+  });
+
+  it("does not treat a counter or an OK as a distance", () => {
+    assert.equal(parseLiveNotify(new Uint8Array([0x44])).distanceM, null);
+    assert.equal(parseLiveNotify(new TextEncoder().encode("OK")).distanceM, null);
+    assert.equal(parseLiveNotify(new Uint8Array([7])).distanceM, null);
   });
 });

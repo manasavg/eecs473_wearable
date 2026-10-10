@@ -105,6 +105,21 @@ describe("ExcursionAppClient", () => {
     await client.disconnect();
   });
 
+  it("shows the UWB distance and keeps it when the counter ticks", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    assert.equal(client.getState().uwbDistanceM, null);
+    transport.emit({ type: "live", counter: null, text: null, hex: "44 d2 04", distanceM: 12.34 });
+    assert.equal(client.getState().uwbDistanceM, 12.34);
+    transport.emit({ type: "live", counter: 3, text: null, hex: "03" });
+    assert.equal(client.getState().uwbDistanceM, 12.34);
+    transport.emit({ type: "live", counter: null, text: "OK", hex: "4f 4b" });
+    assert.equal(client.getState().uwbDistanceM, 12.34);
+    assert.ok(client.getState().groupOkAt);
+    await client.disconnect();
+  });
+
   it("shows the ESP32 counter without inventing a wristband", async () => {
     const transport = new ScriptedTransport();
     const client = new ExcursionAppClient();

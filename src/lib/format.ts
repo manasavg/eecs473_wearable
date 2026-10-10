@@ -11,6 +11,12 @@ export function formatDistance(meters: number | null): string {
   return `${meters.toFixed(1)} m`;
 }
 
+/** Two decimals, matching the DW1000 sketch line `avg=12.34`. */
+export function formatUwbDistance(meters: number | null): string {
+  if (meters == null || !Number.isFinite(meters)) return "—";
+  return `${meters.toFixed(2)} m`;
+}
+
 export function formatBearing(angleDeg: number | null): string {
   if (angleDeg == null || !Number.isFinite(angleDeg)) return "Direction unavailable";
   const rounded = Math.round(angleDeg);

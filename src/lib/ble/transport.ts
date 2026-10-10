@@ -14,7 +14,13 @@ export type BleEvent =
   | { type: "follower"; info: FollowerInfo; lab?: LabSample }
   | { type: "alert"; deviceId: number; status: Status; uwbOutOfRange: boolean }
   | { type: "roster-cleared" }
-  | { type: "live"; counter: number | null; text: string | null; hex: string };
+  | {
+      type: "live";
+      counter: number | null;
+      text: string | null;
+      hex: string;
+      distanceM?: number | null;
+    };
 
 export interface BleTransport {
   connect(remembered?: boolean): Promise<void>;
