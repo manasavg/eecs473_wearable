@@ -41,6 +41,8 @@ unsigned long lastPrint = 0;
 
 void setup() {
   Serial.begin(115200);
+  delay(300);
+  Serial.println(F("ANCHOR UP"));
   DistSerial.begin(9600);
   delay(1000);
   DW1000Ranging.initCommunication(PIN_RST, PIN_SS, PIN_IRQ); //Reset, CS, IRQ pin
@@ -118,6 +120,8 @@ void report() {
     Serial.print(F(" rej=")); Serial.println(rejectedSincePrint);
     DistSerial.print(F("DIST "));
     DistSerial.println(avg, 2);
+    Serial.print(F("pin9 DIST "));
+    Serial.println(avg, 2);
   }
   acceptedSincePrint = 0; rejectedSincePrint = 0; rxSum = 0; rxN = 0;
 }
