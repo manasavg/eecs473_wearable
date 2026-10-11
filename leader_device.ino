@@ -197,6 +197,8 @@ void pollUwbUart() {
     char c = (char)Serial2.read();
     if (c == '\n' || c == '\r') {
       if (uwbLine.length() > 0) {
+        Serial.print("UWB line: ");
+        Serial.println(uwbLine);
         handleDistanceText(uwbLine);
         uwbLine = "";
       }
@@ -234,10 +236,11 @@ void setup() {
 
   // 4. SERIAL
   Serial.begin(115200);
+  delay(300);
+  Serial.println("HELTEC UP");
   Serial2.begin(9600, SERIAL_8N1, UWB_RX_PIN, UWB_TX_PIN);
-  delay(500);
-  Serial.println("\n--- HELTEC V4 LORA NODE STARTUP & BLE! ---");
   Serial.println("UWB distance UART is Serial2 RX GPIO 47 at 9600.");
+  Serial.println("--- HELTEC V4 LORA NODE STARTUP & BLE! ---");
 
   //BLE setup
   //---------------------------------------------------------------------------------------------------
