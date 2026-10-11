@@ -197,6 +197,8 @@ void pollUwbUart() {
     char c = (char)Serial2.read();
     if (c == '\n' || c == '\r') {
       if (uwbLine.length() > 0) {
+        Serial.print("UWB line: ");
+        Serial.println(uwbLine);
         handleDistanceText(uwbLine);
         uwbLine = "";
       }
