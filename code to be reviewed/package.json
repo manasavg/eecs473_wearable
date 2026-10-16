@@ -1,0 +1,37 @@
+{
+  "name": "excursion-leader",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack -H 0.0.0.0 -p 4317",
+    "build": "next build --turbopack",
+    "start": "next start -p 4317",
+    "lint": "eslint",
+    "build:ios": "CAPACITOR=1 next build",
+    "postinstall": "node scripts/patch-ble-ios.mjs",
+    "cap:sync": "npm run build:ios && node scripts/patch-ble-ios.mjs && npx cap sync ios",
+    "test": "node --import tsx --test src/lib/ble/protocol.test.ts src/lib/ble/live-link.test.ts src/lib/ble/app-client.test.ts src/lib/ble/native-transport.test.ts"
+  },
+  "dependencies": {
+    "@capacitor-community/bluetooth-le": "8.3.0",
+    "@capacitor/core": "^8.5.2",
+    "next": "15.5.27",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/ios": "^8.5.2",
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/web-bluetooth": "^0.0.21",
+    "eslint": "^9",
+    "eslint-config-next": "15.5.27",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.15",
+    "typescript": "^5"
+  }
+}

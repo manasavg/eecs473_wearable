@@ -1,0 +1,18 @@
+{
+  "appId": "edu.umich.excursion.leader",
+  "appName": "Excursion",
+  "webDir": "out",
+  "ios": {
+    "contentInset": "automatic"
+  },
+  "plugins": {
+    "BluetoothLe": {
+      "displayStrings": {
+        "scanning": "Looking for Leader_Device_LoRa…",
+        "cancel": "Cancel",
+        "availableDevices": "Beacons",
+        "noDeviceFound": "No Leader_Device_LoRa in range. Is the ESP32 advertising?"
+      }
+    }
+  }
+}
