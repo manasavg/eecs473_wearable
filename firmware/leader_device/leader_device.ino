@@ -37,6 +37,9 @@
 #define BTN_CHECKIN_PIN 4   // Button 1: Sends "CHECK IN"
 #define BTN_OK_PIN      6   // Button 2: Sends "OK"
 
+#define RX_LED_PIN  40 // this the RX LED that is use to notify the wearable 
+
+
 // UWB anchor is an Arduino Uno. Its pin 9 TX wires to UWB_RX_PIN. GND to GND. 9600 baud.
 // UWB_TX_PIN is unused. Do not wire it. IRQ on the DW1000 stays off this board
 // because GPIO 2 is already FEM_EN.
@@ -52,6 +55,11 @@ int i = 0;
 String uwbLine;
 unsigned long lastNotifyMs = 0;
 const unsigned long NOTIFY_MS = 3000;
+
+// this is the timeer logic for the led and buzzer
+unsigned long rxLedOnTime = 0;
+bool rxLedActive = false;
+const unsigned long rxLedDuration = 150; // ms
 
 // Screen Initialization (U8x8 Non-blocking driver)
 U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(OLED_SCL, OLED_SDA, OLED_RST);
@@ -135,7 +143,7 @@ class MyCallbacks : public BLECharacteristicCallbacks {
       for (int i = 0; i < rxValue.length(); i++) {
         Serial.print((uint8_t)rxValue[i]);
       }
-      if ((uint8_t)rxValue[i] == 1){
+      if ((uint8_t)rxValue[i] == 1){ // this could be a bug?? need to set this directly to 0
         check = true;
       }
       Serial.println();
@@ -219,6 +227,10 @@ void setup() {
   pinMode(VEXT_CTRL, OUTPUT);
   digitalWrite(VEXT_CTRL, LOW);
   delay(100);
+
+  // this is the LED buzzer
+  pinMode(RX_LED_PIN, OUTPUT);
+  digitalWrite(RX_LED_PIN, LOW);
 
   // 2. OLED RESET
   pinMode(OLED_RST, OUTPUT);
@@ -335,13 +347,23 @@ void loop() {
       }
       handleDistanceText(msg);
 
-      rgbLedWrite(BOARD_LED, 0, 255, 0); // Green flash
+      // LED and buzzer notification
+      rgbLedWrite(BOARD_LED, 0, 255, 0);   // Green flash
+      digitalWrite(RX_LED_PIN, HIGH);      // External LED on
       printScreen("RECEIVED PACKET", str, "RSSI: " + String(rssi) + " dBm");
-      delay(150);
-      rgbLedWrite(BOARD_LED, 0, 0, 0);
+      rxLedOnTime = millis();
+      rxLedActive = true;
     }
 
     radio.startReceive();
+  }
+
+
+  // this turns both the led and the buzzer off after the duration has passed
+  if (rxLedActive && (millis() - rxLedOnTime >= rxLedDuration)) {
+  rgbLedWrite(BOARD_LED, 0, 0, 0);
+  digitalWrite(RX_LED_PIN, LOW);
+  rxLedActive = false;
   }
 
   // 2. CHECK BUTTON PRESSES
@@ -351,8 +373,21 @@ void loop() {
       lastDebounceTime = millis();
       sendLoRaMessage("CHECK IN");
       check = false;
+    }else if (digitalRead(BTN_OK_PIN) == LOW) {
+      lastDebounceTime = millis();
+      sendLoRaMessage("OK");
     }
   }
+
+  //MAYBE CHECK THIS AGAIN: (this could be the right code instead)
+  //   if (check || digitalRead(BTN_CHECKIN_PIN) == LOW) {
+  //   lastDebounceTime = millis();
+  //   sendLoRaMessage("CHECK IN");
+  //   check = false;
+  // } else if (digitalRead(BTN_OK_PIN) == LOW) {
+  //   lastDebounceTime = millis();
+  //   sendLoRaMessage("OK");
+  // }
 
   // 3. SERIAL TRANSMIT
   if (Serial.available() > 0) {
@@ -360,6 +395,7 @@ void loop() {
     outgoingMsg.trim();
 
     if (outgoingMsg.length() > 0) {
+      
       sendLoRaMessage(outgoingMsg);
     }
   }
