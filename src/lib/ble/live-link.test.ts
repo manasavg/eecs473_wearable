@@ -70,24 +70,47 @@ describe("parseLiveNotify", () => {
   it("decodes a 3-byte leader battery packet", () => {
     const sample = parseLiveNotify(encodeLeader({ batteryPercent: 86 }));
     assert.equal(sample.leaderBattery, 86);
-    assert.equal(sample.distanceM, null);
+    assert.equal(sample.gps, null);
   });
 
-  it("reads the 3-byte UWB distance the leader notifies", () => {
-    const sample = parseLiveNotify(new Uint8Array([0x44, 0xd2, 0x04]));
-    assert.equal(sample.distanceM, 12.34);
+  it("reads the 10-byte GPS fix the leader notifies", () => {
+    const sample = parseLiveNotify(gpsPacket(true, 42.5, -83.25));
+    assert.equal(sample.gps?.fix, true);
+    assert.equal(sample.gps?.lat, 42.5);
+    assert.equal(sample.gps?.lon, -83.25);
     assert.equal(sample.counter, null);
     assert.equal(sample.text, null);
     assert.equal(sample.leaderBattery, null);
     assert.equal(sample.follower, null);
-    const [event] = eventsFromNotify(new Uint8Array([0x44, 0xd2, 0x04]));
+    const [event] = eventsFromNotify(gpsPacket(true, 42.5, -83.25));
     assert.equal(event.type, "live");
-    if (event.type === "live") assert.equal(event.distanceM, 12.34);
+    if (event.type === "live") {
+      assert.equal(event.gps?.fix, true);
+      assert.equal(event.gps?.lat, 42.5);
+      assert.equal(event.gps?.lon, -83.25);
+    }
   });
 
-  it("does not treat a counter or an OK as a distance", () => {
-    assert.equal(parseLiveNotify(new Uint8Array([0x44])).distanceM, null);
-    assert.equal(parseLiveNotify(new TextEncoder().encode("OK")).distanceM, null);
-    assert.equal(parseLiveNotify(new Uint8Array([7])).distanceM, null);
+  it("reads a GPS packet with no lock", () => {
+    const sample = parseLiveNotify(gpsPacket(false, 0, 0));
+    assert.equal(sample.gps?.fix, false);
+    assert.equal(sample.gps?.lat, null);
+    assert.equal(sample.gps?.lon, null);
+  });
+
+  it("does not treat a counter or an OK as a GPS fix", () => {
+    assert.equal(parseLiveNotify(new Uint8Array([0x47])).gps, null);
+    assert.equal(parseLiveNotify(new TextEncoder().encode("OK")).gps, null);
+    assert.equal(parseLiveNotify(new Uint8Array([7])).gps, null);
   });
 });
+
+function gpsPacket(fix: boolean, lat: number, lon: number): Uint8Array {
+  const bytes = new Uint8Array(10);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 0x47;
+  bytes[1] = fix ? 1 : 0;
+  view.setInt32(2, Math.round(lat * 1e7), true);
+  view.setInt32(6, Math.round(lon * 1e7), true);
+  return bytes;
+}

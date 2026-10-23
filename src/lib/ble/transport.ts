@@ -19,7 +19,7 @@ export type BleEvent =
       counter: number | null;
       text: string | null;
       hex: string;
-      distanceM?: number | null;
+      gps?: { fix: boolean; lat: number | null; lon: number | null } | null;
     };
 
 export interface BleTransport {

@@ -1,6 +1,6 @@
-// Heltec V4: LoRa and BLE only.
-// UWB ranging runs on the separate DW1000 boards (firmware/uwb).
-// This sketch reads "DIST 12.34" from the anchor UART and notifies the phone.
+// Heltec V4: LoRa, BLE, and a NEO-6M GPS on Serial2.
+// GPS TX wires to GPIO 47. GND to GND. Module VCC to 5V.
+// Do not use GPIO 16 or 17. GPIO 17 is the OLED data line.
 
 //BLE includes
 #include <BLEDevice.h>
@@ -12,6 +12,9 @@
 #include <RadioLib.h>
 #include <U8x8lib.h>
 #include <Wire.h>
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
 
 //LoRa preliminaries
 //---------------------------------------------------------------------------------------------------
@@ -40,11 +43,11 @@
 #define RX_LED_PIN  40 // this the RX LED that is use to notify the wearable 
 
 
-// UWB anchor is an Arduino Uno. Its pin 9 TX wires to UWB_RX_PIN. GND to GND. 9600 baud.
-// UWB_TX_PIN is unused. Do not wire it. IRQ on the DW1000 stays off this board
-// because GPIO 2 is already FEM_EN.
-#define UWB_RX_PIN      47
-#define UWB_TX_PIN      48
+// NEO-6M default baud is 9600. TX of the module goes to GPS_RX_PIN.
+// GPS_TX_PIN is unused. Do not wire it. GPIO 17 stays the OLED data line.
+#define GPS_RX_PIN      47
+#define GPS_TX_PIN      48
+#define GPS_BAUD        9600
 
 // Debounce timing
 unsigned long lastDebounceTime = 0;
@@ -52,7 +55,8 @@ const unsigned long debounceDelay = 250; // ms
 
 bool check = false;
 int i = 0;
-String uwbLine;
+char gpsLine[96];
+uint8_t gpsLen = 0;
 unsigned long lastNotifyMs = 0;
 const unsigned long NOTIFY_MS = 3000;
 
@@ -152,68 +156,160 @@ class MyCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
-// 'D' + uint16 centimeters, little-endian, on the TX characteristic.
-void notifyDistanceMeters(float meters) {
+// 'G', fix byte, int32 latitude * 1e7, int32 longitude * 1e7. Both little-endian.
+void notifyGps(bool fix, double lat, double lon) {
   if (!deviceConnected || pTxCharacteristic == NULL) return;
-  if (meters < 0.0f || meters > 100.0f) return;
-  uint16_t cm = (uint16_t)(meters * 100.0f + 0.5f);
-  uint8_t pkt[3];
-  pkt[0] = 'D';
-  pkt[1] = (uint8_t)(cm & 0xFF);
-  pkt[2] = (uint8_t)((cm >> 8) & 0xFF);
-  pTxCharacteristic->setValue(pkt, 3);
+  int32_t latE7 = 0;
+  int32_t lonE7 = 0;
+  if (fix) {
+    double latScaled = lat * 10000000.0;
+    double lonScaled = lon * 10000000.0;
+    latE7 = (int32_t)(latScaled >= 0 ? latScaled + 0.5 : latScaled - 0.5);
+    lonE7 = (int32_t)(lonScaled >= 0 ? lonScaled + 0.5 : lonScaled - 0.5);
+  }
+  uint8_t pkt[10];
+  pkt[0] = 'G';
+  pkt[1] = fix ? 1 : 0;
+  pkt[2] = (uint8_t)(latE7 & 0xFF);
+  pkt[3] = (uint8_t)((latE7 >> 8) & 0xFF);
+  pkt[4] = (uint8_t)((latE7 >> 16) & 0xFF);
+  pkt[5] = (uint8_t)((latE7 >> 24) & 0xFF);
+  pkt[6] = (uint8_t)(lonE7 & 0xFF);
+  pkt[7] = (uint8_t)((lonE7 >> 8) & 0xFF);
+  pkt[8] = (uint8_t)((lonE7 >> 16) & 0xFF);
+  pkt[9] = (uint8_t)((lonE7 >> 24) & 0xFF);
+  pTxCharacteristic->setValue(pkt, 10);
   pTxCharacteristic->notify();
-  Serial.print("Phone notified distance: ");
-  Serial.print(meters, 2);
-  Serial.println(" m");
-  printScreen("UWB DISTANCE", String(meters, 2) + " m");
+  if (fix) {
+    Serial.print("Phone notified GPS: ");
+    Serial.print(lat, 6);
+    Serial.print(", ");
+    Serial.println(lon, 6);
+    printScreen("GPS FIX", String(lat, 5), String(lon, 5));
+  } else {
+    Serial.println("Phone notified GPS: no fix");
+    printScreen("GPS", "No fix");
+  }
 }
 
-bool distanceFromText(String msg, float *meters) {
-  msg.trim();
-  int start = -1;
-  if (msg.startsWith("DIST ") || msg.startsWith("dist ")) {
-    start = 5;
-  } else {
-    int at = msg.indexOf("avg=");
-    if (at < 0) at = msg.indexOf("AVG=");
-    if (at >= 0) start = at + 4;
+bool nmeaField(const char *line, int index, char *out, size_t outLen) {
+  const char *p = line;
+  if (*p == '$') p++;
+  int field = 0;
+  while (*p && field < index) {
+    if (*p == '*') return false;
+    if (*p == ',') field++;
+    p++;
   }
-  if (start < 0 || start >= (int)msg.length()) return false;
-  bool digit = false;
-  for (int k = start; k < (int)msg.length(); k++) {
-    char c = msg[k];
-    if (c >= '0' && c <= '9') {
-      digit = true;
-      break;
-    }
-    if (c != ' ' && c != '.' && c != '-' && c != '+') break;
-  }
-  if (!digit) return false;
-  *meters = msg.substring(start).toFloat();
+  if (field != index || outLen == 0) return false;
+  size_t n = 0;
+  while (*p && *p != ',' && *p != '*' && n + 1 < outLen) out[n++] = *p++;
+  out[n] = 0;
   return true;
 }
 
-void handleDistanceText(String msg) {
-  float meters = 0;
-  if (!distanceFromText(msg, &meters)) return;
-  notifyDistanceMeters(meters);
+bool nmeaEndsWith(const char *s, const char *suffix) {
+  size_t n = strlen(s);
+  size_t m = strlen(suffix);
+  if (n < m) return false;
+  return strcmp(s + (n - m), suffix) == 0;
 }
 
-void pollUwbUart() {
+bool nmeaHexNibble(char c, uint8_t *out) {
+  if (c >= '0' && c <= '9') { *out = (uint8_t)(c - '0'); return true; }
+  if (c >= 'A' && c <= 'F') { *out = (uint8_t)(c - 'A' + 10); return true; }
+  if (c >= 'a' && c <= 'f') { *out = (uint8_t)(c - 'a' + 10); return true; }
+  return false;
+}
+
+bool nmeaChecksumOk(const char *line) {
+  const char *star = strchr(line, '*');
+  if (!star) return true;
+  uint8_t hi = 0;
+  uint8_t lo = 0;
+  if (!nmeaHexNibble(star[1], &hi) || !nmeaHexNibble(star[2], &lo)) return false;
+  uint8_t expect = (uint8_t)((hi << 4) | lo);
+  uint8_t got = 0;
+  for (const char *p = line; *p && p != star; p++) {
+    if (*p == '$') continue;
+    got ^= (uint8_t)*p;
+  }
+  return got == expect;
+}
+
+bool nmeaToDegrees(const char *raw, const char *hemi, double *out) {
+  if (!raw[0] || !hemi[0]) return false;
+  double v = atof(raw);
+  double whole = floor(v / 100.0);
+  double minutes = v - whole * 100.0;
+  if (minutes < 0.0 || minutes >= 60.0) return false;
+  double deg = whole + minutes / 60.0;
+  char h = hemi[0];
+  if (h == 'S' || h == 'W') deg = -deg;
+  else if (h != 'N' && h != 'E') return false;
+  if (h == 'N' || h == 'S') {
+    if (deg < -90.0 || deg > 90.0) return false;
+  } else if (deg < -180.0 || deg > 180.0) {
+    return false;
+  }
+  *out = deg;
+  return true;
+}
+
+void handleNmea(const char *line) {
+  Serial.print("GPS: ");
+  Serial.println(line);
+  if (line[0] != '$' || !nmeaChecksumOk(line)) return;
+
+  char type[12];
+  if (!nmeaField(line, 0, type, sizeof(type))) return;
+  bool rmc = nmeaEndsWith(type, "RMC");
+  bool gga = nmeaEndsWith(type, "GGA");
+  if (!rmc && !gga) return;
+
+  char status[8];
+  char latRaw[16];
+  char ns[4];
+  char lonRaw[16];
+  char ew[4];
+  bool fix = false;
+  double lat = 0;
+  double lon = 0;
+
+  if (rmc) {
+    if (!nmeaField(line, 2, status, sizeof(status))) return;
+    fix = status[0] == 'A';
+    if (fix) {
+      if (!nmeaField(line, 3, latRaw, sizeof(latRaw)) || !nmeaField(line, 4, ns, sizeof(ns))) return;
+      if (!nmeaField(line, 5, lonRaw, sizeof(lonRaw)) || !nmeaField(line, 6, ew, sizeof(ew))) return;
+      if (!nmeaToDegrees(latRaw, ns, &lat) || !nmeaToDegrees(lonRaw, ew, &lon)) fix = false;
+    }
+  } else {
+    if (!nmeaField(line, 6, status, sizeof(status))) return;
+    fix = atoi(status) > 0;
+    if (fix) {
+      if (!nmeaField(line, 2, latRaw, sizeof(latRaw)) || !nmeaField(line, 3, ns, sizeof(ns))) return;
+      if (!nmeaField(line, 4, lonRaw, sizeof(lonRaw)) || !nmeaField(line, 5, ew, sizeof(ew))) return;
+      if (!nmeaToDegrees(latRaw, ns, &lat) || !nmeaToDegrees(lonRaw, ew, &lon)) fix = false;
+    }
+  }
+
+  notifyGps(fix, lat, lon);
+}
+
+void pollGpsUart() {
   while (Serial2.available() > 0) {
     char c = (char)Serial2.read();
     if (c == '\n' || c == '\r') {
-      if (uwbLine.length() > 0) {
-        Serial.print("UWB line: ");
-        Serial.println(uwbLine);
-        handleDistanceText(uwbLine);
-        uwbLine = "";
+      if (gpsLen > 0) {
+        gpsLine[gpsLen] = 0;
+        handleNmea(gpsLine);
+        gpsLen = 0;
       }
-    } else if (uwbLine.length() < 80) {
-      uwbLine += c;
+    } else if (gpsLen < sizeof(gpsLine) - 1) {
+      gpsLine[gpsLen++] = c;
     } else {
-      uwbLine = "";
+      gpsLen = 0;
     }
   }
 }
@@ -250,8 +346,8 @@ void setup() {
   Serial.begin(115200);
   delay(300);
   Serial.println("HELTEC UP");
-  Serial2.begin(9600, SERIAL_8N1, UWB_RX_PIN, UWB_TX_PIN);
-  Serial.println("UWB distance UART is Serial2 RX GPIO 47 at 9600.");
+  Serial2.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+  Serial.println("GPS UART is Serial2 RX GPIO 47 at 9600. NEO-6M TX goes there.");
   Serial.println("--- HELTEC V4 LORA NODE STARTUP & BLE! ---");
 
   //BLE setup
@@ -319,7 +415,7 @@ void setup() {
 }
 
 void loop() {
-  pollUwbUart();
+  pollGpsUart();
 
   // 1. RECEIVE INCOMING LORA MESSAGES
   if (digitalRead(LORA_DIO1) == HIGH) {
@@ -345,7 +441,6 @@ void loop() {
         pTxCharacteristic->notify();
         Serial.println("Phone notified: OK");
       }
-      handleDistanceText(msg);
 
       // LED and buzzer notification
       rgbLedWrite(BOARD_LED, 0, 255, 0);   // Green flash

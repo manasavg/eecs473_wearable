@@ -9,8 +9,9 @@
  *
  * setup() does not add the service UUID to the advertising packet. The phone
  * finds the name Leader_Device_LoRa, then opens this service. loop() notifies
- * one uint8 on TX every 3 seconds. onWrite on RX treats a first byte of 1 as
- * the flag that transmits LoRa "CHECK IN".
+ * one uint8 on TX every 3 seconds, and a 10-byte GPS fix when the NEO-6M
+ * reports RMC or GGA. onWrite on RX treats a first byte of 1 as the flag
+ * that transmits LoRa "CHECK IN".
  *
  * Appendix C characteristic UUIDs below are not on that sketch. The transport
  * subscribes to them only when the ESP32 adds them to this same service.

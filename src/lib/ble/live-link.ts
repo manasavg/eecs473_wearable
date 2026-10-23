@@ -11,13 +11,13 @@ import type { FollowerInfo } from "./types";
 /**
  * Bytes from the ESP32 sketch in firmware/leader_device/leader_device.ino.
  *
- * The TX characteristic notifies one uint8 every 3 seconds, and a 3-byte
- * distance packet (`D` + uint16 centimeters, little-endian) when the UWB
- * anchor reports a filtered range:
+ * The TX characteristic notifies one uint8 every 3 seconds, and a 10-byte
+ * GPS packet when the NEO-6M emits RMC or GGA:
  *
- *   pTxCharacteristic->setValue(&txValue, 1);
- *   pTxCharacteristic->notify();
- *   txValue++;
+ *   'G', fix (0 or 1), int32 latitude * 1e7, int32 longitude * 1e7
+ *
+ * Both integers are little-endian. A fix byte of 0 means the module has
+ * not locked. A later counter byte does not clear the last fix.
  *
  * A 1-byte notification is that counter. A 4-byte notification is still read
  * as a little-endian uint32 so an older counter does not look like an alert.
@@ -27,14 +27,23 @@ import type { FollowerInfo } from "./types";
  * can start carrying wristbands without another app change.
  */
 
+/** 'G' plus fix byte plus two int32 microdegrees. */
+export const GPS_PACKET_BYTES = 10;
+
+export interface GpsFix {
+  fix: boolean;
+  lat: number | null;
+  lon: number | null;
+}
+
 export interface LiveNotify {
   counter: number | null;
   text: string | null;
   hex: string;
   follower: FollowerInfo | null;
   leaderBattery: number | null;
-  /** Meters between the UWB anchor and tag, when this notify is a distance packet. */
-  distanceM: number | null;
+  /** Leader NEO-6M position, when this notify is a GPS packet. */
+  gps: GpsFix | null;
 }
 
 export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
@@ -45,7 +54,7 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
     hex,
     follower: null,
     leaderBattery: null,
-    distanceM: null,
+    gps: null,
   };
 
   if (bytes.length === 1) {
@@ -64,11 +73,8 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
     }
   }
 
-  // 'D' + uint16 centimeters, little-endian. The leader sends this when the
-  // UWB anchor reports a filtered range.
-  if (bytes.length === 3 && bytes[0] === 0x44) {
-    const cm = bytes[1] | (bytes[2] << 8);
-    return { ...base, distanceM: cm / 100 };
+  if (bytes.length === GPS_PACKET_BYTES && bytes[0] === 0x47) {
+    return { ...base, gps: decodeGps(bytes) };
   }
 
   if (bytes.length === LEADER_PACKET_BYTES && bytes[0] === PACKET_VERSION) {
@@ -103,13 +109,25 @@ export function eventsFromNotify(bytes: Uint8Array): BleEvent[] {
     counter: sample.counter,
     text: sample.text,
     hex: sample.hex,
-    distanceM: sample.distanceM,
+    gps: sample.gps,
   });
   return events;
 }
 
 export function bytesToHex(bytes: Uint8Array): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join(" ");
+}
+
+function decodeGps(bytes: Uint8Array): GpsFix {
+  const locked = bytes[1] === 1;
+  if (!locked) return { fix: false, lat: null, lon: null };
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const lat = view.getInt32(2, true) / 1e7;
+  const lon = view.getInt32(6, true) / 1e7;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    return { fix: false, lat: null, lon: null };
+  }
+  return { fix: true, lat, lon };
 }
 
 function uint32le(bytes: Uint8Array): number {

@@ -101,18 +101,36 @@ describe("ExcursionAppClient", () => {
     await client.disconnect();
   });
 
-  it("shows the UWB distance and keeps it when the counter ticks", async () => {
+  it("shows the GPS fix and keeps it when the counter ticks", async () => {
     const transport = new ScriptedTransport();
     const client = new ExcursionAppClient();
     await client.connectDevice("beacon", transport);
-    assert.equal(client.getState().uwbDistanceM, null);
-    transport.emit({ type: "live", counter: null, text: null, hex: "44 d2 04", distanceM: 12.34 });
-    assert.equal(client.getState().uwbDistanceM, 12.34);
+    assert.equal(client.getState().gpsFix, null);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "47 01",
+      gps: { fix: true, lat: 42.5, lon: -83.25 },
+    });
+    assert.equal(client.getState().gpsFix, true);
+    assert.equal(client.getState().gpsLat, 42.5);
+    assert.equal(client.getState().gpsLon, -83.25);
     transport.emit({ type: "live", counter: 3, text: null, hex: "03" });
-    assert.equal(client.getState().uwbDistanceM, 12.34);
+    assert.equal(client.getState().gpsLat, 42.5);
     transport.emit({ type: "live", counter: null, text: "OK", hex: "4f 4b" });
-    assert.equal(client.getState().uwbDistanceM, 12.34);
+    assert.equal(client.getState().gpsLon, -83.25);
     assert.ok(client.getState().groupOkAt);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "47 00",
+      gps: { fix: false, lat: null, lon: null },
+    });
+    assert.equal(client.getState().gpsFix, false);
+    assert.equal(client.getState().gpsLat, null);
+    assert.equal(client.getState().gpsLon, null);
     await client.disconnect();
   });
 

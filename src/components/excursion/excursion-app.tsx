@@ -5,7 +5,7 @@ import { BROADCAST_ID } from "@/lib/ble/constants";
 import { isNativeShell } from "@/lib/ble/create-transport";
 import { webBluetoothAvailable } from "@/lib/ble/web-bluetooth-transport";
 import { BLE_NAME_PREFIX } from "@/lib/ble/uuids";
-import { formatUwbDistance } from "@/lib/format";
+import { formatGpsDegrees } from "@/lib/format";
 import { useExcursion } from "./use-excursion";
 
 export function ExcursionApp() {
@@ -35,7 +35,7 @@ export function ExcursionApp() {
       {!onLink ? (
         <div className="mt-6 flex flex-col gap-4">
           <p className="text-sm text-neutral-600">
-            Connect to the LoRa leader ({BLE_NAME_PREFIX}). Distance comes from the separate UWB boards.
+            Connect to the LoRa leader ({BLE_NAME_PREFIX}). Position comes from the NEO-6M on that board.
           </p>
           {state.error && (
             <p className="text-sm text-red-700" role="alert">
@@ -109,10 +109,19 @@ export function ExcursionApp() {
           </section>
 
           <section className="border-t border-neutral-200 pt-6">
-            <h2 className="text-sm font-medium">UWB</h2>
-            <p className="mt-2 text-4xl tabular-nums">{formatUwbDistance(state.uwbDistanceM)}</p>
+            <h2 className="text-sm font-medium">GPS</h2>
+            {state.gpsFix === true ? (
+              <div className="mt-2">
+                <p className="text-sm text-neutral-600">Latitude</p>
+                <p className="text-2xl tabular-nums">{formatGpsDegrees(state.gpsLat)}</p>
+                <p className="mt-2 text-sm text-neutral-600">Longitude</p>
+                <p className="text-2xl tabular-nums">{formatGpsDegrees(state.gpsLon)}</p>
+              </div>
+            ) : (
+              <p className="mt-2 text-4xl">{state.gpsFix === false ? "No fix" : "—"}</p>
+            )}
             <p className="mt-2 text-sm text-neutral-600">
-              Anchor to tag. The LoRa board only forwards this number.
+              Leader NEO-6M. The antenna needs a view of the sky.
             </p>
           </section>
 

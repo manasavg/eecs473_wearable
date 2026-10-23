@@ -1,6 +1,6 @@
 # Radios
 
-The phone talks only to the Heltec, over BLE. The DW1000 boards do not use BLE.
+The phone talks only to the Heltec, over BLE. The NEO-6M has no radio of its own. Its TX pin is wired to the Heltec.
 
 ## LoRa leader
 
@@ -19,17 +19,15 @@ A follower LoRa message `OK` (or `OK` plus an id) is notified back as the two by
 
 TX also sends one counter byte every 3 seconds. That byte is the link heartbeat.
 
-## UWB
+## GPS
 
-`firmware/uwb/anchor/anchor.ino` and `firmware/uwb/tag/tag.ino`
-
-Channel 2, `MODE_LONGDATA_RANGE_ACCURACY`. The anchor is an Arduino Uno. It prints a filtered average every 2 seconds and writes `DIST 12.34` at 9600 from pin 9 (SoftwareSerial). Uno pin 0/1 stay the USB serial monitor.
-
-Heltec Serial2 RX is GPIO 47, 9600 8N1. Share ground. The Heltec then notifies 3 bytes on TX:
+NEO-6M TX to Heltec GPIO 47, GND to GND, VCC to 5V. Serial2 is 9600 8N1. The sketch parses `$GPRMC` / `$GPGGA` (and the `GN` forms) and notifies 10 bytes on TX:
 
 | Offset | Meaning |
 | --- | --- |
-| 0 | `D` (`0x44`) |
-| 1–2 | centimeters, uint16 little-endian |
+| 0 | `G` (`0x47`) |
+| 1 | `1` when the fix is valid, `0` when it is not |
+| 2–5 | latitude, int32 degrees × 10⁷, little-endian |
+| 6–9 | longitude, int32 degrees × 10⁷, little-endian |
 
-`12.34 m` is `44 d2 04`. A later counter byte does not clear the last distance.
+`42.5, -83.25` with a lock is `47 01 40 fc 54 19 e0 0e 61 ce`. A later counter byte does not clear the last fix. A packet with fix `0` clears it and the phone shows No fix.

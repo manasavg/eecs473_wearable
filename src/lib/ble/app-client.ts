@@ -92,8 +92,10 @@ export interface AppState {
   groupCheckInAt: number | null;
   /** When the leader notified that a follower pressed OK. No wearable id. */
   groupOkAt: number | null;
-  /** Latest filtered UWB range between the leader anchor and the follower tag. */
-  uwbDistanceM: number | null;
+  /** Null until the first GPS packet. False when the NEO-6M has not locked. */
+  gpsFix: boolean | null;
+  gpsLat: number | null;
+  gpsLon: number | null;
 }
 
 export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppState {
@@ -111,7 +113,9 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
     liveLink: null,
     groupCheckInAt: null,
     groupOkAt: null,
-    uwbDistanceM: null,
+    gpsFix: null,
+    gpsLat: null,
+    gpsLon: null,
   };
 }
 
@@ -265,7 +269,7 @@ export class ExcursionAppClient {
         this.commit({
           ...this.state,
           connection: "disconnected",
-          error: "The beacon link dropped. The last distances are still on screen.",
+          error: "The beacon link dropped.",
         });
         return;
       case "reconnecting":
@@ -299,14 +303,15 @@ export class ExcursionAppClient {
       case "live": {
         const now = Date.now();
         const followerOk = isFollowerOkSignal(event.text);
-        const distance =
-          event.distanceM != null && Number.isFinite(event.distanceM) ? event.distanceM : null;
+        const gps = event.gps;
         this.commit(
           {
             ...this.state,
             lastPacketAt: now,
             groupOkAt: followerOk ? now : this.state.groupOkAt,
-            uwbDistanceM: distance ?? this.state.uwbDistanceM,
+            gpsFix: gps ? gps.fix : this.state.gpsFix,
+            gpsLat: gps ? gps.lat : this.state.gpsLat,
+            gpsLon: gps ? gps.lon : this.state.gpsLon,
             liveLink: {
               counter: event.counter ?? this.state.liveLink?.counter ?? null,
               text: event.text ?? this.state.liveLink?.text ?? null,
