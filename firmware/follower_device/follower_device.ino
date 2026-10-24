@@ -1,7 +1,8 @@
 // Heltec V4 follower: LoRa and a NEO-6M GPS on Serial2.
 // GPS TX wires to GPIO 47. GND to GND. Module VCC to 5V.
 // Do not use GPIO 16 or 17. GPIO 17 is the OLED data line.
-// This board does not use Bluetooth. It sends "POS <lat> <lon>" to the leader.
+// This board does not use Bluetooth. It stays in receive and sends
+// "POS <lat> <lon>" only after the leader sends "PING".
 // The OK button still sends LoRa "OK" for check-in.
 
 #include <RadioLib.h>
@@ -35,8 +36,6 @@
 
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 250;
-unsigned long lastPosSendMs = 0;
-const unsigned long POS_SEND_MS = 3000;
 
 unsigned long rxLedOnTime = 0;
 bool rxLedActive = false;
@@ -47,10 +46,14 @@ uint8_t gpsLen = 0;
 bool gpsFix = false;
 double gpsLat = 0;
 double gpsLon = 0;
-bool gpsSeen = false;
 
 U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(OLED_SCL, OLED_SDA, OLED_RST);
 SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
+
+void flushGps() {
+  while (Serial2.available() > 0) Serial2.read();
+  gpsLen = 0;
+}
 
 void printScreen(String line1, String line2, String line3 = "") {
   u8x8.clearDisplay();
@@ -85,6 +88,7 @@ void sendLoRaMessage(String outgoingMsg) {
 
   rgbLedWrite(BOARD_LED, 0, 0, 0);
   radio.startReceive();
+  flushGps();
 }
 
 bool nmeaField(const char *line, int index, char *out, size_t outLen) {
@@ -119,7 +123,7 @@ bool nmeaHexNibble(char c, uint8_t *out) {
 
 bool nmeaChecksumOk(const char *line) {
   const char *star = strchr(line, '*');
-  if (!star) return true;
+  if (!star || !star[1] || !star[2]) return false;
   uint8_t hi = 0;
   uint8_t lo = 0;
   if (!nmeaHexNibble(star[1], &hi) || !nmeaHexNibble(star[2], &lo)) return false;
@@ -189,7 +193,6 @@ void handleNmea(const char *line) {
     }
   }
 
-  gpsSeen = true;
   gpsFix = fix;
   if (fix) {
     gpsLat = lat;
@@ -222,9 +225,8 @@ void sendPosition() {
     sendLoRaMessage("POS NOFIX");
     return;
   }
-  char body[40];
-  snprintf(body, sizeof(body), "POS %.6f %.6f", gpsLat, gpsLon);
-  sendLoRaMessage(String(body));
+  String body = "POS " + String(gpsLat, 6) + " " + String(gpsLon, 6);
+  sendLoRaMessage(body);
 }
 
 void setup() {
@@ -293,13 +295,20 @@ void loop() {
       Serial.print(rssi);
       Serial.println(" dBm");
 
+      String msg = str;
+      msg.trim();
+      String upper = msg;
+      upper.toUpperCase();
       rgbLedWrite(BOARD_LED, 0, 255, 0);
       digitalWrite(RX_LED_PIN, HIGH);
       printScreen("RECEIVED PACKET", str, "RSSI: " + String(rssi) + " dBm");
       rxLedOnTime = millis();
       rxLedActive = true;
+      radio.startReceive();
+      if (upper == "PING") sendPosition();
+    } else {
+      radio.startReceive();
     }
-    radio.startReceive();
   }
 
   if (rxLedActive && (millis() - rxLedOnTime >= rxLedDuration)) {
@@ -311,11 +320,6 @@ void loop() {
   if ((millis() - lastDebounceTime) > debounceDelay && digitalRead(BTN_OK_PIN) == LOW) {
     lastDebounceTime = millis();
     sendLoRaMessage("OK");
-  }
-
-  if (gpsSeen && millis() - lastPosSendMs >= POS_SEND_MS) {
-    lastPosSendMs = millis();
-    sendPosition();
   }
 
   delay(10);

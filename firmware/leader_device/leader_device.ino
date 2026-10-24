@@ -1,8 +1,9 @@
 // Heltec V4 leader: LoRa, BLE, and a NEO-6M GPS on Serial2.
 // GPS TX wires to GPIO 47. GND to GND. Module VCC to 5V.
 // Do not use GPIO 16 or 17. GPIO 17 is the OLED data line.
-// The follower sketch sends "POS <lat> <lon>" over LoRa. This board
-// computes the distance between the two fixes and notifies the phone.
+// The follower only transmits when this board sends "PING", then this board
+// listens. LoRa cannot receive while it is transmitting. This board computes
+// the distance between the two fixes and notifies the phone.
 
 //BLE includes
 #include <BLEDevice.h>
@@ -73,6 +74,12 @@ const unsigned long FOLLOWER_POS_TTL_MS = 15000;
 unsigned long lastSepNotifyMs = 0;
 bool lastSepKnown = false;
 double lastSepMeters = -1;
+unsigned long lastBleNotifyMs = 0;
+unsigned long lastPingMs = 0;
+unsigned long lastPhoneMs = 0;
+const unsigned long PING_EVERY_MS = 4000;
+const unsigned long PING_LISTEN_MS = 1500;
+const unsigned long PHONE_EVERY_MS = 1000;
 
 // this is the timeer logic for the led and buzzer
 unsigned long rxLedOnTime = 0;
@@ -82,6 +89,11 @@ const unsigned long rxLedDuration = 150; // ms
 // Screen Initialization (U8x8 Non-blocking driver)
 U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(OLED_SCL, OLED_SDA, OLED_RST);
 SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
+
+void flushGps() {
+  while (Serial2.available() > 0) Serial2.read();
+  gpsLen = 0;
+}
 
 void printScreen(String line1, String line2, String line3 = "") {
   u8x8.clearDisplay();
@@ -119,6 +131,8 @@ void sendLoRaMessage(String outgoingMsg) {
 
   rgbLedWrite(BOARD_LED, 0, 0, 0); // Turn off LED
   radio.startReceive();
+  // Transmit blocks long enough for the GPS UART to overflow mid-sentence.
+  flushGps();
 }
 
 
@@ -170,9 +184,19 @@ class MyCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
+// A second notify replaces the first if it is still queued. Wait between them.
+void bleNotify(const uint8_t *data, size_t len) {
+  if (!deviceConnected || pTxCharacteristic == NULL) return;
+  if (lastBleNotifyMs != 0 && millis() - lastBleNotifyMs < 60) {
+    delay(60 - (millis() - lastBleNotifyMs));
+  }
+  pTxCharacteristic->setValue((uint8_t *)data, len);
+  pTxCharacteristic->notify();
+  lastBleNotifyMs = millis();
+}
+
 // 'G', fix byte, int32 latitude * 1e7, int32 longitude * 1e7. Both little-endian.
 void notifyGps(bool fix, double lat, double lon) {
-  if (!deviceConnected || pTxCharacteristic == NULL) return;
   int32_t latE7 = 0;
   int32_t lonE7 = 0;
   if (fix) {
@@ -192,8 +216,7 @@ void notifyGps(bool fix, double lat, double lon) {
   pkt[7] = (uint8_t)((lonE7 >> 8) & 0xFF);
   pkt[8] = (uint8_t)((lonE7 >> 16) & 0xFF);
   pkt[9] = (uint8_t)((lonE7 >> 24) & 0xFF);
-  pTxCharacteristic->setValue(pkt, 10);
-  pTxCharacteristic->notify();
+  bleNotify(pkt, 10);
   if (fix) {
     Serial.print("Phone notified GPS: ");
     Serial.print(lat, 6);
@@ -210,16 +233,13 @@ void notifyGps(bool fix, double lat, double lon) {
 void notifySeparation(bool known, double meters) {
   if (known && (meters < 0.0 || meters >= 1000000.0)) known = false;
   uint32_t cm = known ? (uint32_t)(meters * 100.0 + 0.5) : 0xFFFFFFFFu;
-  if (deviceConnected && pTxCharacteristic != NULL) {
-    uint8_t pkt[5];
-    pkt[0] = 'M';
-    pkt[1] = (uint8_t)(cm & 0xFF);
-    pkt[2] = (uint8_t)((cm >> 8) & 0xFF);
-    pkt[3] = (uint8_t)((cm >> 16) & 0xFF);
-    pkt[4] = (uint8_t)((cm >> 24) & 0xFF);
-    pTxCharacteristic->setValue(pkt, 5);
-    pTxCharacteristic->notify();
-  }
+  uint8_t pkt[5];
+  pkt[0] = 'M';
+  pkt[1] = (uint8_t)(cm & 0xFF);
+  pkt[2] = (uint8_t)((cm >> 8) & 0xFF);
+  pkt[3] = (uint8_t)((cm >> 16) & 0xFF);
+  pkt[4] = (uint8_t)((cm >> 24) & 0xFF);
+  bleNotify(pkt, 5);
   if (known) {
     Serial.print("Phone notified distance: ");
     Serial.print(meters, 1);
@@ -319,7 +339,7 @@ bool nmeaHexNibble(char c, uint8_t *out) {
 
 bool nmeaChecksumOk(const char *line) {
   const char *star = strchr(line, '*');
-  if (!star) return true;
+  if (!star || !star[1] || !star[2]) return false;
   uint8_t hi = 0;
   uint8_t lo = 0;
   if (!nmeaHexNibble(star[1], &hi) || !nmeaHexNibble(star[2], &lo)) return false;
@@ -394,8 +414,6 @@ void handleNmea(const char *line) {
     selfLat = lat;
     selfLon = lon;
   }
-  notifyGps(fix, lat, lon);
-  refreshDistance();
 }
 
 void pollGpsUart() {
@@ -540,10 +558,9 @@ void loop() {
       msg.trim();
       String upper = msg;
       upper.toUpperCase();
-      if (deviceConnected && pTxCharacteristic != NULL && (upper == "OK" || upper.startsWith("OK "))) {
+      if (upper == "OK" || upper.startsWith("OK ")) {
         uint8_t okBytes[2] = { 'O', 'K' };
-        pTxCharacteristic->setValue(okBytes, 2);
-        pTxCharacteristic->notify();
+        bleNotify(okBytes, 2);
         Serial.println("Phone notified: OK");
       }
       handleFollowerPosition(msg);
@@ -607,9 +624,26 @@ void loop() {
     lastNotifyMs = millis();
     Serial.print("Notifying Value: ");
     Serial.println(txValue);
-    pTxCharacteristic->setValue(&txValue, 1);
-    pTxCharacteristic->notify();
+    bleNotify(&txValue, 1);
     txValue++;
+  }
+
+  if (millis() - lastPhoneMs >= PHONE_EVERY_MS) {
+    lastPhoneMs = millis();
+    notifyGps(selfFix, selfLat, selfLon);
+    refreshDistance();
+  }
+
+  if (millis() - lastPingMs >= PING_EVERY_MS) {
+    lastPingMs = millis();
+    sendLoRaMessage("PING");
+    unsigned long listenUntil = millis() + PING_LISTEN_MS;
+    while ((long)(listenUntil - millis()) > 0) {
+      pollGpsUart();
+      if (digitalRead(LORA_DIO1) == HIGH) break;
+      if (check) break;
+      delay(5);
+    }
   }
 
   // disconnecting

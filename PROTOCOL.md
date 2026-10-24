@@ -36,7 +36,7 @@ NEO-6M TX to Heltec GPIO 47, GND to GND, VCC to 5V. Serial2 is 9600 8N1. The ske
 
 `firmware/follower_device/follower_device.ino`
 
-Same radio settings as the leader: 915.0 MHz, bandwidth 125, spreading factor 9, coding rate 5, sync word `0x12`. About every 3 seconds it sends one of:
+Same radio settings as the leader: 915.0 MHz, bandwidth 125, spreading factor 9, coding rate 5, sync word `0x12`. LoRa cannot receive during a transmit, so the follower does not broadcast on its own. About every 4 seconds the leader sends `PING`, then listens for 1.5 seconds. The follower replies with one of:
 
 ```text
 POS 42.331427 -83.045754
