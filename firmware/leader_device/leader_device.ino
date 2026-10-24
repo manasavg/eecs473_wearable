@@ -1,6 +1,8 @@
-// Heltec V4: LoRa, BLE, and a NEO-6M GPS on Serial2.
+// Heltec V4 leader: LoRa, BLE, and a NEO-6M GPS on Serial2.
 // GPS TX wires to GPIO 47. GND to GND. Module VCC to 5V.
 // Do not use GPIO 16 or 17. GPIO 17 is the OLED data line.
+// The follower sketch sends "POS <lat> <lon>" over LoRa. This board
+// computes the distance between the two fixes and notifies the phone.
 
 //BLE includes
 #include <BLEDevice.h>
@@ -59,6 +61,18 @@ char gpsLine[96];
 uint8_t gpsLen = 0;
 unsigned long lastNotifyMs = 0;
 const unsigned long NOTIFY_MS = 3000;
+
+bool selfFix = false;
+double selfLat = 0;
+double selfLon = 0;
+bool followerFix = false;
+double followerLat = 0;
+double followerLon = 0;
+unsigned long followerPosMs = 0;
+const unsigned long FOLLOWER_POS_TTL_MS = 15000;
+unsigned long lastSepNotifyMs = 0;
+bool lastSepKnown = false;
+double lastSepMeters = -1;
 
 // this is the timeer logic for the led and buzzer
 unsigned long rxLedOnTime = 0;
@@ -192,6 +206,87 @@ void notifyGps(bool fix, double lat, double lon) {
   }
 }
 
+// 'M' + uint32 centimeters, little-endian. 0xFFFFFFFF means no distance.
+void notifySeparation(bool known, double meters) {
+  if (known && (meters < 0.0 || meters >= 1000000.0)) known = false;
+  uint32_t cm = known ? (uint32_t)(meters * 100.0 + 0.5) : 0xFFFFFFFFu;
+  if (deviceConnected && pTxCharacteristic != NULL) {
+    uint8_t pkt[5];
+    pkt[0] = 'M';
+    pkt[1] = (uint8_t)(cm & 0xFF);
+    pkt[2] = (uint8_t)((cm >> 8) & 0xFF);
+    pkt[3] = (uint8_t)((cm >> 16) & 0xFF);
+    pkt[4] = (uint8_t)((cm >> 24) & 0xFF);
+    pTxCharacteristic->setValue(pkt, 5);
+    pTxCharacteristic->notify();
+  }
+  if (known) {
+    Serial.print("Phone notified distance: ");
+    Serial.print(meters, 1);
+    Serial.println(" m");
+    printScreen("DISTANCE", String(meters, 1) + " m");
+  } else {
+    Serial.println("Phone notified distance: no fix");
+    printScreen("DISTANCE", "No fix");
+  }
+}
+
+double haversineMeters(double lat1, double lon1, double lat2, double lon2) {
+  const double radius = 6371000.0;
+  const double toRad = 0.017453292519943295;
+  double dLat = (lat2 - lat1) * toRad;
+  double dLon = (lon2 - lon1) * toRad;
+  double a = sin(dLat / 2.0) * sin(dLat / 2.0)
+    + cos(lat1 * toRad) * cos(lat2 * toRad) * sin(dLon / 2.0) * sin(dLon / 2.0);
+  if (a < 0.0) a = 0.0;
+  if (a > 1.0) a = 1.0;
+  return 2.0 * radius * asin(sqrt(a));
+}
+
+void refreshDistance() {
+  if (followerFix && followerPosMs != 0 && millis() - followerPosMs > FOLLOWER_POS_TTL_MS) {
+    followerFix = false;
+  }
+  bool known = selfFix && followerFix;
+  double meters = known ? haversineMeters(selfLat, selfLon, followerLat, followerLon) : 0.0;
+  bool changed = known != lastSepKnown || fabs(meters - lastSepMeters) >= 1.0;
+  if (!changed && millis() - lastSepNotifyMs < 2000) return;
+  lastSepKnown = known;
+  lastSepMeters = meters;
+  lastSepNotifyMs = millis();
+  notifySeparation(known, meters);
+}
+
+bool handleFollowerPosition(const String &msg) {
+  String upper = msg;
+  upper.toUpperCase();
+  if (!upper.startsWith("POS")) return false;
+  String rest = msg.substring(3);
+  rest.trim();
+  String restUpper = rest;
+  restUpper.toUpperCase();
+  if (restUpper == "NOFIX" || rest.length() == 0) {
+    followerFix = false;
+    followerPosMs = millis();
+    refreshDistance();
+    return true;
+  }
+  int splitAt = rest.indexOf(' ');
+  if (splitAt < 1) return true;
+  double lat = rest.substring(0, splitAt).toFloat();
+  double lon = rest.substring(splitAt + 1).toFloat();
+  if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) {
+    followerFix = false;
+  } else {
+    followerFix = true;
+    followerLat = lat;
+    followerLon = lon;
+  }
+  followerPosMs = millis();
+  refreshDistance();
+  return true;
+}
+
 bool nmeaField(const char *line, int index, char *out, size_t outLen) {
   const char *p = line;
   if (*p == '$') p++;
@@ -294,7 +389,13 @@ void handleNmea(const char *line) {
     }
   }
 
+  selfFix = fix;
+  if (fix) {
+    selfLat = lat;
+    selfLon = lon;
+  }
   notifyGps(fix, lat, lon);
+  refreshDistance();
 }
 
 void pollGpsUart() {
@@ -416,6 +517,10 @@ void setup() {
 
 void loop() {
   pollGpsUart();
+  if (followerFix && followerPosMs != 0 && millis() - followerPosMs > FOLLOWER_POS_TTL_MS) {
+    followerFix = false;
+    refreshDistance();
+  }
 
   // 1. RECEIVE INCOMING LORA MESSAGES
   if (digitalRead(LORA_DIO1) == HIGH) {
@@ -441,6 +546,7 @@ void loop() {
         pTxCharacteristic->notify();
         Serial.println("Phone notified: OK");
       }
+      handleFollowerPosition(msg);
 
       // LED and buzzer notification
       rgbLedWrite(BOARD_LED, 0, 255, 0);   // Green flash

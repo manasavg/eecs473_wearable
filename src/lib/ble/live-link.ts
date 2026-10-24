@@ -11,13 +11,15 @@ import type { FollowerInfo } from "./types";
 /**
  * Bytes from the ESP32 sketch in firmware/leader_device/leader_device.ino.
  *
- * The TX characteristic notifies one uint8 every 3 seconds, and a 10-byte
- * GPS packet when the NEO-6M emits RMC or GGA:
+ * The TX characteristic notifies one uint8 every 3 seconds, a 10-byte GPS
+ * packet when the leader NEO-6M emits RMC or GGA, and a 5-byte distance
+ * packet after the follower's position arrives over LoRa:
  *
  *   'G', fix (0 or 1), int32 latitude * 1e7, int32 longitude * 1e7
+ *   'M', uint32 centimeters, little-endian. 0xFFFFFFFF means no distance.
  *
  * Both integers are little-endian. A fix byte of 0 means the module has
- * not locked. A later counter byte does not clear the last fix.
+ * not locked. A later counter byte does not clear the last fix or distance.
  *
  * A 1-byte notification is that counter. A 4-byte notification is still read
  * as a little-endian uint32 so an older counter does not look like an alert.
@@ -30,10 +32,18 @@ import type { FollowerInfo } from "./types";
 /** 'G' plus fix byte plus two int32 microdegrees. */
 export const GPS_PACKET_BYTES = 10;
 
+/** 'M' plus uint32 centimeters. */
+export const SEPARATION_PACKET_BYTES = 5;
+
 export interface GpsFix {
   fix: boolean;
   lat: number | null;
   lon: number | null;
+}
+
+export interface Separation {
+  known: boolean;
+  meters: number | null;
 }
 
 export interface LiveNotify {
@@ -44,6 +54,8 @@ export interface LiveNotify {
   leaderBattery: number | null;
   /** Leader NEO-6M position, when this notify is a GPS packet. */
   gps: GpsFix | null;
+  /** Meters between the two GPS fixes, when this notify is a distance packet. */
+  separation: Separation | null;
 }
 
 export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
@@ -55,6 +67,7 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
     follower: null,
     leaderBattery: null,
     gps: null,
+    separation: null,
   };
 
   if (bytes.length === 1) {
@@ -75,6 +88,10 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
 
   if (bytes.length === GPS_PACKET_BYTES && bytes[0] === 0x47) {
     return { ...base, gps: decodeGps(bytes) };
+  }
+
+  if (bytes.length === SEPARATION_PACKET_BYTES && bytes[0] === 0x4d) {
+    return { ...base, separation: decodeSeparation(bytes) };
   }
 
   if (bytes.length === LEADER_PACKET_BYTES && bytes[0] === PACKET_VERSION) {
@@ -110,12 +127,20 @@ export function eventsFromNotify(bytes: Uint8Array): BleEvent[] {
     text: sample.text,
     hex: sample.hex,
     gps: sample.gps,
+    separation: sample.separation,
   });
   return events;
 }
 
 export function bytesToHex(bytes: Uint8Array): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join(" ");
+}
+
+function decodeSeparation(bytes: Uint8Array): Separation {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const cm = view.getUint32(1, true);
+  if (cm === 0xffffffff) return { known: false, meters: null };
+  return { known: true, meters: cm / 100 };
 }
 
 function decodeGps(bytes: Uint8Array): GpsFix {

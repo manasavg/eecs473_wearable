@@ -103,7 +103,33 @@ describe("parseLiveNotify", () => {
     assert.equal(parseLiveNotify(new TextEncoder().encode("OK")).gps, null);
     assert.equal(parseLiveNotify(new Uint8Array([7])).gps, null);
   });
+
+  it("reads the 5-byte distance the leader notifies", () => {
+    const bytes = separationPacket(12.34);
+    const sample = parseLiveNotify(bytes);
+    assert.equal(sample.separation?.known, true);
+    assert.equal(sample.separation?.meters, 12.34);
+    assert.equal(sample.gps, null);
+    assert.equal(sample.text, null);
+    const [event] = eventsFromNotify(bytes);
+    assert.equal(event.type, "live");
+    if (event.type === "live") assert.equal(event.separation?.meters, 12.34);
+  });
+
+  it("reads a distance packet with no fix", () => {
+    const sample = parseLiveNotify(new Uint8Array([0x4d, 0xff, 0xff, 0xff, 0xff]));
+    assert.equal(sample.separation?.known, false);
+    assert.equal(sample.separation?.meters, null);
+  });
 });
+
+function separationPacket(meters: number): Uint8Array {
+  const bytes = new Uint8Array(5);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 0x4d;
+  view.setUint32(1, Math.round(meters * 100), true);
+  return bytes;
+}
 
 function gpsPacket(fix: boolean, lat: number, lon: number): Uint8Array {
   const bytes = new Uint8Array(10);

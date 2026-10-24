@@ -5,7 +5,7 @@ import { BROADCAST_ID } from "@/lib/ble/constants";
 import { isNativeShell } from "@/lib/ble/create-transport";
 import { webBluetoothAvailable } from "@/lib/ble/web-bluetooth-transport";
 import { BLE_NAME_PREFIX } from "@/lib/ble/uuids";
-import { formatGpsDegrees } from "@/lib/format";
+import { formatGpsDegrees, formatSeparation } from "@/lib/format";
 import { useExcursion } from "./use-excursion";
 
 export function ExcursionApp() {
@@ -35,7 +35,7 @@ export function ExcursionApp() {
       {!onLink ? (
         <div className="mt-6 flex flex-col gap-4">
           <p className="text-sm text-neutral-600">
-            Connect to the LoRa leader ({BLE_NAME_PREFIX}). Position comes from the NEO-6M on that board.
+            Connect to the LoRa leader ({BLE_NAME_PREFIX}). Distance comes from the GPS on the leader and the follower.
           </p>
           {state.error && (
             <p className="text-sm text-red-700" role="alert">
@@ -109,7 +109,21 @@ export function ExcursionApp() {
           </section>
 
           <section className="border-t border-neutral-200 pt-6">
-            <h2 className="text-sm font-medium">GPS</h2>
+            <h2 className="text-sm font-medium">Distance</h2>
+            <p className="mt-2 text-4xl tabular-nums">
+              {state.separationKnown === true
+                ? formatSeparation(state.separationM)
+                : state.separationKnown === false
+                  ? "No fix"
+                  : "—"}
+            </p>
+            <p className="mt-2 text-sm text-neutral-600">
+              Leader to follower. Both GPS antennas need a view of the sky.
+            </p>
+          </section>
+
+          <section className="border-t border-neutral-200 pt-6">
+            <h2 className="text-sm font-medium">Leader GPS</h2>
             {state.gpsFix === true ? (
               <div className="mt-2">
                 <p className="text-sm text-neutral-600">Latitude</p>
@@ -121,7 +135,7 @@ export function ExcursionApp() {
               <p className="mt-2 text-4xl">{state.gpsFix === false ? "No fix" : "—"}</p>
             )}
             <p className="mt-2 text-sm text-neutral-600">
-              Leader NEO-6M. The antenna needs a view of the sky.
+              Leader position only. The follower sends its own over LoRa.
             </p>
           </section>
 

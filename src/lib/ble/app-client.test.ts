@@ -134,6 +134,34 @@ describe("ExcursionAppClient", () => {
     await client.disconnect();
   });
 
+  it("shows the GPS distance and clears it when either fix drops", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    assert.equal(client.getState().separationKnown, null);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "4d",
+      separation: { known: true, meters: 12.3 },
+    });
+    assert.equal(client.getState().separationKnown, true);
+    assert.equal(client.getState().separationM, 12.3);
+    transport.emit({ type: "live", counter: 3, text: null, hex: "03" });
+    assert.equal(client.getState().separationM, 12.3);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "4d ff ff ff ff",
+      separation: { known: false, meters: null },
+    });
+    assert.equal(client.getState().separationKnown, false);
+    assert.equal(client.getState().separationM, null);
+    await client.disconnect();
+  });
+
   it("shows the ESP32 counter without inventing a wristband", async () => {
     const transport = new ScriptedTransport();
     const client = new ExcursionAppClient();

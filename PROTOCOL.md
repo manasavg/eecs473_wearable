@@ -1,6 +1,6 @@
 # Radios
 
-The phone talks only to the Heltec, over BLE. The NEO-6M has no radio of its own. Its TX pin is wired to the Heltec.
+The phone talks only to the leader Heltec, over BLE. Each NEO-6M TX pin is wired to its own Heltec. The follower sends its position to the leader over LoRa.
 
 ## LoRa leader
 
@@ -31,3 +31,23 @@ NEO-6M TX to Heltec GPIO 47, GND to GND, VCC to 5V. Serial2 is 9600 8N1. The ske
 | 6–9 | longitude, int32 degrees × 10⁷, little-endian |
 
 `42.5, -83.25` with a lock is `47 01 40 fc 54 19 e0 0e 61 ce`. A later counter byte does not clear the last fix. A packet with fix `0` clears it and the phone shows No fix.
+
+## Follower position
+
+`firmware/follower_device/follower_device.ino`
+
+Same radio settings as the leader: 915.0 MHz, bandwidth 125, spreading factor 9, coding rate 5, sync word `0x12`. About every 3 seconds it sends one of:
+
+```text
+POS 42.331427 -83.045754
+POS NOFIX
+```
+
+The leader stores that fix. If no `POS` arrives for 15 seconds, the follower fix is dropped. When both fixes are valid the leader notifies 5 bytes on TX:
+
+| Offset | Meaning |
+| --- | --- |
+| 0 | `M` (`0x4D`) |
+| 1–4 | centimeters, uint32 little-endian. `0xFFFFFFFF` means no distance |
+
+`12.34 m` is `4d d2 04 00 00`. A later counter byte does not clear the last distance. A no-distance packet clears it and the phone shows No fix. The distance is the haversine between the two points, using an Earth radius of 6,371,000 m.

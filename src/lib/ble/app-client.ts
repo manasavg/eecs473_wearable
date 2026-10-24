@@ -96,6 +96,9 @@ export interface AppState {
   gpsFix: boolean | null;
   gpsLat: number | null;
   gpsLon: number | null;
+  /** Null until the first distance packet. False when either GPS has no fix. */
+  separationKnown: boolean | null;
+  separationM: number | null;
 }
 
 export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppState {
@@ -116,6 +119,8 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
     gpsFix: null,
     gpsLat: null,
     gpsLon: null,
+    separationKnown: null,
+    separationM: null,
   };
 }
 
@@ -304,6 +309,7 @@ export class ExcursionAppClient {
         const now = Date.now();
         const followerOk = isFollowerOkSignal(event.text);
         const gps = event.gps;
+        const separation = event.separation;
         this.commit(
           {
             ...this.state,
@@ -312,6 +318,8 @@ export class ExcursionAppClient {
             gpsFix: gps ? gps.fix : this.state.gpsFix,
             gpsLat: gps ? gps.lat : this.state.gpsLat,
             gpsLon: gps ? gps.lon : this.state.gpsLon,
+            separationKnown: separation ? separation.known : this.state.separationKnown,
+            separationM: separation ? separation.meters : this.state.separationM,
             liveLink: {
               counter: event.counter ?? this.state.liveLink?.counter ?? null,
               text: event.text ?? this.state.liveLink?.text ?? null,
