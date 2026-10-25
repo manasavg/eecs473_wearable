@@ -296,7 +296,6 @@ void setup() {
   u8x8.setFlipMode(1);
   u8x8.setFont(u8x8_font_chroma48medium8_r);
   Serial.begin(115200);
-  Serial.setTxTimeoutMs(0);
   delay(300);
   Serial.println("FOLLOWER UP");
   Serial2.setRxBufferSize(2048);
