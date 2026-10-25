@@ -290,16 +290,6 @@ void notifyGps(bool fix, double lat, double lon) {
   pkt[8] = (uint8_t)((lonE7 >> 16) & 0xFF);
   pkt[9] = (uint8_t)((lonE7 >> 24) & 0xFF);
   bleNotify(pkt, 10);
-  if (fix) {
-    Serial.print("Phone notified GPS: ");
-    Serial.print(lat, 6);
-    Serial.print(", ");
-    Serial.println(lon, 6);
-    printScreen("GPS FIX", String(lat, 5), String(lon, 5));
-  } else {
-    Serial.println("Phone notified GPS: no fix");
-    printScreen("GPS", "No fix");
-  }
 }
 
 // 'M' + uint32 centimeters, little-endian. 0xFFFFFFFF means no distance.
@@ -313,15 +303,6 @@ void notifySeparation(bool known, double meters) {
   pkt[3] = (uint8_t)((cm >> 16) & 0xFF);
   pkt[4] = (uint8_t)((cm >> 24) & 0xFF);
   bleNotify(pkt, 5);
-  if (known) {
-    Serial.print("Phone notified distance: ");
-    Serial.print(meters, 1);
-    Serial.println(" m");
-    printScreen("DISTANCE", String(meters, 1) + " m");
-  } else {
-    Serial.println("Phone notified distance: no fix");
-    printScreen("DISTANCE", "No fix");
-  }
 }
 
 double haversineMeters(double lat1, double lon1, double lat2, double lon2) {
@@ -445,8 +426,6 @@ bool nmeaToDegrees(const char *raw, const char *hemi, double *out) {
 }
 
 void handleNmea(const char *line) {
-  Serial.print("GPS: ");
-  Serial.println(line);
   if (line[0] != '$' || !nmeaChecksumOk(line)) return;
 
   char type[12];
@@ -532,13 +511,12 @@ void setup() {
   u8x8.setPowerSave(0);
   u8x8.setFlipMode(1);
   u8x8.setFont(u8x8_font_chroma48medium8_r);
-  printScreen("Heltec V4 LoRa", "Booting...", "Initializing RF");
-  drawScreen();
-
   // 4. SERIAL
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
   delay(300);
   Serial.println("HELTEC UP");
+  Serial2.setRxBufferSize(2048);
   Serial2.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
   Serial.println("GPS UART is Serial2 RX GPIO 47 at 9600. NEO-6M TX goes there.");
   Serial.println("--- HELTEC V4 LORA NODE STARTUP & BLE! ---");
@@ -601,13 +579,9 @@ void setup() {
 
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("SX1262 Init Success!");
-    printScreen("Heltec V4 Node", "Ready to Send", "Press a Button");
-    drawScreen();
   } else {
     Serial.print("SX1262 Init Failed, Code: ");
     Serial.println(state);
-    printScreen("ERROR!", "Radio Failed", "Code: " + String(state));
-    drawScreen();
     while (true);
   }
 
@@ -650,12 +624,13 @@ void loop() {
         uint8_t okBytes[2] = { 'O', 'K' };
         bleNotify(okBytes, 2);
         Serial.println("Phone notified: OK");
+        printScreen("CHECK IN", "OK", "");
+        drawScreen();
       }
       handleFollowerPosition(msg);
 
       rgbLedWrite(BOARD_LED, 0, 255, 0);
       digitalWrite(RX_LED_PIN, HIGH);
-      printScreen("RECEIVED PACKET", str, "RSSI: " + String(rssi) + " dBm");
       rxLedOnTime = millis();
       rxLedActive = true;
     }
@@ -671,6 +646,8 @@ void loop() {
     if (check) {
       lastDebounceTime = millis();
       queueLoRa("CHECK IN");
+      printScreen("CHECK IN", "Sending", "");
+      drawScreen();
       check = false;
     } else if (digitalRead(BTN_OK_PIN) == LOW) {
       lastDebounceTime = millis();
@@ -725,7 +702,6 @@ void loop() {
     oldDeviceConnected = true;
   }
 
-  pollScreen();
   pollBleNotify();
   pollGpsUart();
   yield();

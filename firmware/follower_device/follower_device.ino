@@ -209,8 +209,6 @@ bool nmeaToDegrees(const char *raw, const char *hemi, double *out) {
 }
 
 void handleNmea(const char *line) {
-  Serial.print("GPS: ");
-  Serial.println(line);
   if (line[0] != '$' || !nmeaChecksumOk(line)) return;
 
   char type[12];
@@ -250,9 +248,6 @@ void handleNmea(const char *line) {
   if (fix) {
     gpsLat = lat;
     gpsLon = lon;
-    printScreen("GPS FIX", String(lat, 5), String(lon, 5));
-  } else {
-    printScreen("GPS", "No fix");
   }
 }
 
@@ -300,12 +295,11 @@ void setup() {
   u8x8.setPowerSave(0);
   u8x8.setFlipMode(1);
   u8x8.setFont(u8x8_font_chroma48medium8_r);
-  printScreen("Follower", "Booting...", "Initializing RF");
-  drawScreen();
-
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
   delay(300);
   Serial.println("FOLLOWER UP");
+  Serial2.setRxBufferSize(2048);
   Serial2.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
   Serial.println("GPS UART is Serial2 RX GPIO 47 at 9600. NEO-6M TX goes there.");
 
@@ -323,13 +317,9 @@ void setup() {
   int state = radio.begin(915.0, 125.0, 9, 5, 0x12, 10, 8, 1.8);
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("SX1262 Init Success!");
-    printScreen("Follower", "Ready", "Waiting GPS");
-    drawScreen();
   } else {
     Serial.print("SX1262 Init Failed, Code: ");
     Serial.println(state);
-    printScreen("ERROR!", "Radio Failed", "Code: " + String(state));
-    drawScreen();
     while (true);
   }
 
@@ -362,9 +352,12 @@ void loop() {
       upper.toUpperCase();
       rgbLedWrite(BOARD_LED, 0, 255, 0);
       digitalWrite(RX_LED_PIN, HIGH);
-      printScreen("RECEIVED PACKET", str, "RSSI: " + String(rssi) + " dBm");
       rxLedOnTime = millis();
       rxLedActive = true;
+      if (upper == "CHECK IN" || upper.startsWith("CHECK IN ")) {
+        printScreen("CHECK IN", "", "");
+        drawScreen();
+      }
       if (upper == "PING") sendPosition();
     }
   }
@@ -378,9 +371,10 @@ void loop() {
   if ((millis() - lastDebounceTime) > debounceDelay && digitalRead(BTN_OK_PIN) == LOW) {
     lastDebounceTime = millis();
     queueLoRa("OK");
+    printScreen("OK", "Sending", "");
+    drawScreen();
   }
 
-  pollScreen();
   pollGpsUart();
   yield();
 }
