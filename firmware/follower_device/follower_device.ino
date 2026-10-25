@@ -43,6 +43,15 @@ const unsigned long rxLedDuration = 150;
 
 char gpsLine[96];
 uint8_t gpsLen = 0;
+bool radioTx = false;
+unsigned long radioTxMs = 0;
+char pendingMsg[80];
+bool pendingMsgReady = false;
+char scr1[17] = "";
+char scr2[17] = "";
+char scr3[17] = "";
+bool scrDirty = false;
+unsigned long lastScrMs = 0;
 bool gpsFix = false;
 double gpsLat = 0;
 double gpsLon = 0;
@@ -50,45 +59,89 @@ double gpsLon = 0;
 U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(OLED_SCL, OLED_SDA, OLED_RST);
 SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
 
-void flushGps() {
-  while (Serial2.available() > 0) Serial2.read();
-  gpsLen = 0;
+void clipCopy(char *dst, const char *src) {
+  size_t n = 0;
+  if (src) {
+    while (src[n] && n < 16) {
+      dst[n] = src[n];
+      n++;
+    }
+  }
+  dst[n] = 0;
+}
+
+void drawScreen() {
+  u8x8.clearDisplay();
+  u8x8.setCursor(0, 0);
+  u8x8.print(scr1);
+  u8x8.setCursor(0, 2);
+  u8x8.print(scr2);
+  if (scr3[0]) {
+    u8x8.setCursor(0, 4);
+    u8x8.print(scr3);
+  }
+  scrDirty = false;
+  lastScrMs = millis();
 }
 
 void printScreen(String line1, String line2, String line3 = "") {
-  u8x8.clearDisplay();
-  u8x8.setCursor(0, 0);
-  u8x8.print(line1);
-  u8x8.setCursor(0, 2);
-  u8x8.print(line2);
-  if (line3.length() > 0) {
-    u8x8.setCursor(0, 4);
-    u8x8.print(line3);
-  }
+  char a[17];
+  char b[17];
+  char c[17];
+  clipCopy(a, line1.c_str());
+  clipCopy(b, line2.c_str());
+  clipCopy(c, line3.c_str());
+  if (strcmp(a, scr1) == 0 && strcmp(b, scr2) == 0 && strcmp(c, scr3) == 0) return;
+  memcpy(scr1, a, 17);
+  memcpy(scr2, b, 17);
+  memcpy(scr3, c, 17);
+  scrDirty = true;
 }
 
-void sendLoRaMessage(String outgoingMsg) {
-  rgbLedWrite(BOARD_LED, 0, 0, 255);
+void pollScreen() {
+  if (!scrDirty) return;
+  if (lastScrMs != 0 && millis() - lastScrMs < 400) return;
+  drawScreen();
+}
+
+bool startLoRa(const char *msg) {
+  if (radioTx || msg == NULL || msg[0] == 0) return false;
   Serial.print("\n[Transmitting]: ");
-  Serial.println(outgoingMsg);
-  printScreen("TRANSMITTING...", outgoingMsg);
-
+  Serial.println(msg);
+  rgbLedWrite(BOARD_LED, 0, 0, 255);
   digitalWrite(FEM_PA, HIGH);
-  int txState = radio.transmit(outgoingMsg);
-  digitalWrite(FEM_PA, LOW);
-
-  if (txState == RADIOLIB_ERR_NONE) {
-    Serial.println(" -> TX Success!");
-    printScreen("TX SUCCESS!", "Sent:", outgoingMsg);
-  } else {
-    Serial.print(" -> TX Failed, code: ");
+  int txState = radio.startTransmit(msg);
+  if (txState != RADIOLIB_ERR_NONE) {
+    digitalWrite(FEM_PA, LOW);
+    rgbLedWrite(BOARD_LED, 0, 0, 0);
+    Serial.print(" -> TX start failed, code: ");
     Serial.println(txState);
-    printScreen("TX FAILED!", "Code: " + String(txState));
+    radio.startReceive();
+    return false;
   }
+  radioTx = true;
+  radioTxMs = millis();
+  return true;
+}
 
+void queueLoRa(const char *msg) {
+  if (msg == NULL || msg[0] == 0) return;
+  strncpy(pendingMsg, msg, sizeof(pendingMsg) - 1);
+  pendingMsg[sizeof(pendingMsg) - 1] = 0;
+  pendingMsgReady = true;
+}
+
+void finishTxIfDone() {
+  if (!radioTx) return;
+  bool irq = digitalRead(LORA_DIO1) == HIGH;
+  bool stuck = millis() - radioTxMs > 3000;
+  if (!irq && !stuck) return;
+  radio.finishTransmit();
+  digitalWrite(FEM_PA, LOW);
   rgbLedWrite(BOARD_LED, 0, 0, 0);
+  radioTx = false;
+  Serial.println(" -> TX done");
   radio.startReceive();
-  flushGps();
 }
 
 bool nmeaField(const char *line, int index, char *out, size_t outLen) {
@@ -222,11 +275,11 @@ void pollGpsUart() {
 
 void sendPosition() {
   if (!gpsFix) {
-    sendLoRaMessage("POS NOFIX");
+    queueLoRa("POS NOFIX");
     return;
   }
   String body = "POS " + String(gpsLat, 6) + " " + String(gpsLon, 6);
-  sendLoRaMessage(body);
+  queueLoRa(body.c_str());
 }
 
 void setup() {
@@ -248,6 +301,7 @@ void setup() {
   u8x8.setFlipMode(1);
   u8x8.setFont(u8x8_font_chroma48medium8_r);
   printScreen("Follower", "Booting...", "Initializing RF");
+  drawScreen();
 
   Serial.begin(115200);
   delay(300);
@@ -270,10 +324,12 @@ void setup() {
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("SX1262 Init Success!");
     printScreen("Follower", "Ready", "Waiting GPS");
+    drawScreen();
   } else {
     Serial.print("SX1262 Init Failed, Code: ");
     Serial.println(state);
     printScreen("ERROR!", "Radio Failed", "Code: " + String(state));
+    drawScreen();
     while (true);
   }
 
@@ -283,10 +339,15 @@ void setup() {
 
 void loop() {
   pollGpsUart();
+  finishTxIfDone();
+  if (!radioTx && pendingMsgReady) {
+    if (startLoRa(pendingMsg)) pendingMsgReady = false;
+  }
 
-  if (digitalRead(LORA_DIO1) == HIGH) {
+  if (!radioTx && digitalRead(LORA_DIO1) == HIGH) {
     String str;
     int radioState = radio.readData(str);
+    radio.startReceive();
     if (radioState == RADIOLIB_ERR_NONE && str.length() > 0) {
       int rssi = radio.getRSSI();
       Serial.print("\n[Received]: \"");
@@ -304,10 +365,7 @@ void loop() {
       printScreen("RECEIVED PACKET", str, "RSSI: " + String(rssi) + " dBm");
       rxLedOnTime = millis();
       rxLedActive = true;
-      radio.startReceive();
       if (upper == "PING") sendPosition();
-    } else {
-      radio.startReceive();
     }
   }
 
@@ -319,8 +377,10 @@ void loop() {
 
   if ((millis() - lastDebounceTime) > debounceDelay && digitalRead(BTN_OK_PIN) == LOW) {
     lastDebounceTime = millis();
-    sendLoRaMessage("OK");
+    queueLoRa("OK");
   }
 
-  delay(10);
+  pollScreen();
+  pollGpsUart();
+  yield();
 }

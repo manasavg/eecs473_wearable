@@ -57,7 +57,6 @@ unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 250; // ms
 
 bool check = false;
-int i = 0;
 char gpsLine[96];
 uint8_t gpsLen = 0;
 unsigned long lastNotifyMs = 0;
@@ -78,8 +77,26 @@ unsigned long lastBleNotifyMs = 0;
 unsigned long lastPingMs = 0;
 unsigned long lastPhoneMs = 0;
 const unsigned long PING_EVERY_MS = 4000;
-const unsigned long PING_LISTEN_MS = 1500;
 const unsigned long PHONE_EVERY_MS = 1000;
+bool radioTx = false;
+unsigned long radioTxMs = 0;
+char pendingMsg[80];
+bool pendingMsgReady = false;
+char usbLine[80];
+uint8_t usbLen = 0;
+bool advRestartPending = false;
+unsigned long restartAdvAt = 0;
+char scr1[17] = "";
+char scr2[17] = "";
+char scr3[17] = "";
+bool scrDirty = false;
+unsigned long lastScrMs = 0;
+#define BLE_PKT_MAX 20
+#define BLE_Q 4
+uint8_t bleQ[BLE_Q][BLE_PKT_MAX];
+uint8_t bleQLen[BLE_Q];
+uint8_t bleHead = 0;
+uint8_t bleCount = 0;
 
 // this is the timeer logic for the led and buzzer
 unsigned long rxLedOnTime = 0;
@@ -90,49 +107,90 @@ const unsigned long rxLedDuration = 150; // ms
 U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(OLED_SCL, OLED_SDA, OLED_RST);
 SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
 
-void flushGps() {
-  while (Serial2.available() > 0) Serial2.read();
-  gpsLen = 0;
+void clipCopy(char *dst, const char *src) {
+  size_t n = 0;
+  if (src) {
+    while (src[n] && n < 16) {
+      dst[n] = src[n];
+      n++;
+    }
+  }
+  dst[n] = 0;
 }
 
-void printScreen(String line1, String line2, String line3 = "") {
+void drawScreen() {
   u8x8.clearDisplay();
   u8x8.setCursor(0, 0);
-  u8x8.print(line1);
+  u8x8.print(scr1);
   u8x8.setCursor(0, 2);
-  u8x8.print(line2);
-  if (line3.length() > 0) {
+  u8x8.print(scr2);
+  if (scr3[0]) {
     u8x8.setCursor(0, 4);
-    u8x8.print(line3);
+    u8x8.print(scr3);
   }
+  scrDirty = false;
+  lastScrMs = millis();
 }
 
-// Helper function to transmit LoRa packet
-void sendLoRaMessage(String outgoingMsg) {
-  rgbLedWrite(BOARD_LED, 0, 0, 255); // Blue flash
+// Queues the text. The I2C redraw happens later from pollScreen().
+void printScreen(String line1, String line2, String line3 = "") {
+  char a[17];
+  char b[17];
+  char c[17];
+  clipCopy(a, line1.c_str());
+  clipCopy(b, line2.c_str());
+  clipCopy(c, line3.c_str());
+  if (strcmp(a, scr1) == 0 && strcmp(b, scr2) == 0 && strcmp(c, scr3) == 0) return;
+  memcpy(scr1, a, 17);
+  memcpy(scr2, b, 17);
+  memcpy(scr3, c, 17);
+  scrDirty = true;
+}
 
+void pollScreen() {
+  if (!scrDirty) return;
+  if (lastScrMs != 0 && millis() - lastScrMs < 400) return;
+  drawScreen();
+}
+
+bool startLoRa(const char *msg) {
+  if (radioTx || msg == NULL || msg[0] == 0) return false;
   Serial.print("\n[Transmitting]: ");
-  Serial.println(outgoingMsg);
-
-  printScreen("TRANSMITTING...", outgoingMsg);
-
+  Serial.println(msg);
+  rgbLedWrite(BOARD_LED, 0, 0, 255);
   digitalWrite(FEM_PA, HIGH);
-  int txState = radio.transmit(outgoingMsg);
-  digitalWrite(FEM_PA, LOW);
-
-  if (txState == RADIOLIB_ERR_NONE) {
-    Serial.println(" -> TX Success!");
-    printScreen("TX SUCCESS!", "Sent:", outgoingMsg);
-  } else {
-    Serial.print(" -> TX Failed, code: ");
+  int txState = radio.startTransmit(msg);
+  if (txState != RADIOLIB_ERR_NONE) {
+    digitalWrite(FEM_PA, LOW);
+    rgbLedWrite(BOARD_LED, 0, 0, 0);
+    Serial.print(" -> TX start failed, code: ");
     Serial.println(txState);
-    printScreen("TX FAILED!", "Code: " + String(txState));
+    radio.startReceive();
+    return false;
   }
+  radioTx = true;
+  radioTxMs = millis();
+  return true;
+}
 
-  rgbLedWrite(BOARD_LED, 0, 0, 0); // Turn off LED
+void queueLoRa(const char *msg) {
+  if (msg == NULL || msg[0] == 0) return;
+  strncpy(pendingMsg, msg, sizeof(pendingMsg) - 1);
+  pendingMsg[sizeof(pendingMsg) - 1] = 0;
+  pendingMsgReady = true;
+}
+
+void finishTxIfDone() {
+  if (!radioTx) return;
+  bool irq = digitalRead(LORA_DIO1) == HIGH;
+  bool stuck = millis() - radioTxMs > 3000;
+  if (!irq && !stuck) return;
+  radio.finishTransmit();
+  digitalWrite(FEM_PA, LOW);
+  rgbLedWrite(BOARD_LED, 0, 0, 0);
+  radioTx = false;
+  Serial.println(" -> TX done");
   radio.startReceive();
-  // Transmit blocks long enough for the GPS UART to overflow mid-sentence.
-  flushGps();
 }
 
 
@@ -172,10 +230,10 @@ class MyCallbacks : public BLECharacteristicCallbacks {
     if (rxValue.length() > 0) {
       Serial.println("*********");
       Serial.print("Received Value: ");
-      for (int i = 0; i < rxValue.length(); i++) {
-        Serial.print((uint8_t)rxValue[i]);
+      for (unsigned int n = 0; n < rxValue.length(); n++) {
+        Serial.print((uint8_t)rxValue[n]);
       }
-      if ((uint8_t)rxValue[i] == 1){ // this could be a bug?? need to set this directly to 0
+      if ((uint8_t)rxValue[0] == 1) {
         check = true;
       }
       Serial.println();
@@ -184,14 +242,29 @@ class MyCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
-// A second notify replaces the first if it is still queued. Wait between them.
+// Copies into a fixed 20-byte slot. The BLE stack reads that slot later.
 void bleNotify(const uint8_t *data, size_t len) {
-  if (!deviceConnected || pTxCharacteristic == NULL) return;
-  if (lastBleNotifyMs != 0 && millis() - lastBleNotifyMs < 60) {
-    delay(60 - (millis() - lastBleNotifyMs));
+  if (data == NULL || len == 0 || len > BLE_PKT_MAX) {
+    Serial.println("BLE notify dropped: length out of range");
+    return;
   }
-  pTxCharacteristic->setValue((uint8_t *)data, len);
+  if (bleCount >= BLE_Q) {
+    bleHead = (uint8_t)((bleHead + 1) % BLE_Q);
+    bleCount--;
+  }
+  uint8_t tail = (uint8_t)((bleHead + bleCount) % BLE_Q);
+  memcpy(bleQ[tail], data, len);
+  bleQLen[tail] = (uint8_t)len;
+  bleCount++;
+}
+
+void pollBleNotify() {
+  if (!deviceConnected || pTxCharacteristic == NULL || bleCount == 0) return;
+  if (lastBleNotifyMs != 0 && millis() - lastBleNotifyMs < 60) return;
+  pTxCharacteristic->setValue(bleQ[bleHead], bleQLen[bleHead]);
   pTxCharacteristic->notify();
+  bleHead = (uint8_t)((bleHead + 1) % BLE_Q);
+  bleCount--;
   lastBleNotifyMs = millis();
 }
 
@@ -460,6 +533,7 @@ void setup() {
   u8x8.setFlipMode(1);
   u8x8.setFont(u8x8_font_chroma48medium8_r);
   printScreen("Heltec V4 LoRa", "Booting...", "Initializing RF");
+  drawScreen();
 
   // 4. SERIAL
   Serial.begin(115200);
@@ -492,6 +566,12 @@ void setup() {
 
   pRxCharacteristic->setCallbacks(new MyCallbacks());
 
+  // Give the TX attribute room for the 10-byte GPS packet before the service starts.
+  // A shorter initial value makes later notifies fail as out of bounds.
+  uint8_t bleRoom[BLE_PKT_MAX];
+  memset(bleRoom, 0, sizeof(bleRoom));
+  pTxCharacteristic->setValue(bleRoom, sizeof(bleRoom));
+
   // Start the service
   pService->start();
 
@@ -522,10 +602,12 @@ void setup() {
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("SX1262 Init Success!");
     printScreen("Heltec V4 Node", "Ready to Send", "Press a Button");
+    drawScreen();
   } else {
     Serial.print("SX1262 Init Failed, Code: ");
     Serial.println(state);
     printScreen("ERROR!", "Radio Failed", "Code: " + String(state));
+    drawScreen();
     while (true);
   }
 
@@ -540,10 +622,16 @@ void loop() {
     refreshDistance();
   }
 
-  // 1. RECEIVE INCOMING LORA MESSAGES
-  if (digitalRead(LORA_DIO1) == HIGH) {
+  finishTxIfDone();
+  if (!radioTx && pendingMsgReady) {
+    if (startLoRa(pendingMsg)) pendingMsgReady = false;
+  }
+
+  // DIO1 during transmit means the transmit finished, not a received packet.
+  if (!radioTx && digitalRead(LORA_DIO1) == HIGH) {
     String str;
     int radioState = radio.readData(str);
+    radio.startReceive();
 
     if (radioState == RADIOLIB_ERR_NONE && str.length() > 0) {
       int rssi = radio.getRSSI();
@@ -565,60 +653,43 @@ void loop() {
       }
       handleFollowerPosition(msg);
 
-      // LED and buzzer notification
-      rgbLedWrite(BOARD_LED, 0, 255, 0);   // Green flash
-      digitalWrite(RX_LED_PIN, HIGH);      // External LED on
+      rgbLedWrite(BOARD_LED, 0, 255, 0);
+      digitalWrite(RX_LED_PIN, HIGH);
       printScreen("RECEIVED PACKET", str, "RSSI: " + String(rssi) + " dBm");
       rxLedOnTime = millis();
       rxLedActive = true;
     }
-
-    radio.startReceive();
   }
 
-
-  // this turns both the led and the buzzer off after the duration has passed
   if (rxLedActive && (millis() - rxLedOnTime >= rxLedDuration)) {
-  rgbLedWrite(BOARD_LED, 0, 0, 0);
-  digitalWrite(RX_LED_PIN, LOW);
-  rxLedActive = false;
+    rgbLedWrite(BOARD_LED, 0, 0, 0);
+    digitalWrite(RX_LED_PIN, LOW);
+    rxLedActive = false;
   }
 
-  // 2. CHECK BUTTON PRESSES
   if ((millis() - lastDebounceTime) > debounceDelay) {
-    // Check "CHECK IN" Button (GPIO 7)
     if (check) {
       lastDebounceTime = millis();
-      sendLoRaMessage("CHECK IN");
+      queueLoRa("CHECK IN");
       check = false;
-    }else if (digitalRead(BTN_OK_PIN) == LOW) {
+    } else if (digitalRead(BTN_OK_PIN) == LOW) {
       lastDebounceTime = millis();
-      sendLoRaMessage("OK");
+      queueLoRa("OK");
     }
   }
 
-  //MAYBE CHECK THIS AGAIN: (this could be the right code instead)
-  //   if (check || digitalRead(BTN_CHECKIN_PIN) == LOW) {
-  //   lastDebounceTime = millis();
-  //   sendLoRaMessage("CHECK IN");
-  //   check = false;
-  // } else if (digitalRead(BTN_OK_PIN) == LOW) {
-  //   lastDebounceTime = millis();
-  //   sendLoRaMessage("OK");
-  // }
-
-  // 3. SERIAL TRANSMIT
-  if (Serial.available() > 0) {
-    String outgoingMsg = Serial.readStringUntil('\n');
-    outgoingMsg.trim();
-
-    if (outgoingMsg.length() > 0) {
-      
-      sendLoRaMessage(outgoingMsg);
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (usbLen > 0) {
+        usbLine[usbLen] = 0;
+        queueLoRa(usbLine);
+        usbLen = 0;
+      }
+    } else if (usbLen < sizeof(usbLine) - 1) {
+      usbLine[usbLen++] = c;
     }
   }
-
-  delay(10);
 
   if (deviceConnected && millis() - lastNotifyMs >= NOTIFY_MS) {
     lastNotifyMs = millis();
@@ -634,28 +705,28 @@ void loop() {
     refreshDistance();
   }
 
-  if (millis() - lastPingMs >= PING_EVERY_MS) {
+  if (!radioTx && !pendingMsgReady && millis() - lastPingMs >= PING_EVERY_MS) {
     lastPingMs = millis();
-    sendLoRaMessage("PING");
-    unsigned long listenUntil = millis() + PING_LISTEN_MS;
-    while ((long)(listenUntil - millis()) > 0) {
-      pollGpsUart();
-      if (digitalRead(LORA_DIO1) == HIGH) break;
-      if (check) break;
-      delay(5);
-    }
+    startLoRa("PING");
   }
 
-  // disconnecting
-  if (!deviceConnected && oldDeviceConnected) {
-    delay(500);                   // give the bluetooth stack the chance to get things ready
-    pServer->startAdvertising();  // restart advertising
+  if (!deviceConnected && oldDeviceConnected && !advRestartPending) {
+    advRestartPending = true;
+    restartAdvAt = millis() + 500;
+  }
+  if (advRestartPending && (long)(millis() - restartAdvAt) >= 0) {
+    pServer->startAdvertising();
     Serial.println("Started advertising again...");
+    advRestartPending = false;
     oldDeviceConnected = false;
   }
-  // connecting
   if (deviceConnected && !oldDeviceConnected) {
-    // do stuff here on connecting
+    advRestartPending = false;
     oldDeviceConnected = true;
   }
+
+  pollScreen();
+  pollBleNotify();
+  pollGpsUart();
+  yield();
 }
