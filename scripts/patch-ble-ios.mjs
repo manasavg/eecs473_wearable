@@ -103,12 +103,22 @@ for (const [from, to] of replacements) {
 
 }
 
-if (text.includes(nameFilter)) {
-  text = text.replace(nameFilter, nameFilterFixed);
+const nameFilterStrict = `    private func passesNamePrefixFilter(peripheralName: String?) -> Bool {
+        guard let prefix = self.deviceNamePrefixFilter else { return true }
+        // A missing name must not match. Treating it as a match listed every
+        // nearby device as Leader_Device_LoRa and the rows could not be tapped.
+        guard let name = peripheralName, !name.isEmpty else { return false }
+        return name.hasPrefix(prefix)
+    }`;
+
+if (text.includes(nameFilterFixed)) {
+  text = text.replace(nameFilterFixed, nameFilterStrict);
+} else if (text.includes(nameFilter)) {
+  text = text.replace(nameFilter, nameFilterStrict);
 }
 
-text = text.replaceAll('resolvedName ?? "Unknown"', 'resolvedName ?? "Leader_Device_LoRa"');
-text = text.replaceAll('resolvedName ?? "Leader_Device"', 'resolvedName ?? "Leader_Device_LoRa"');
+text = text.replaceAll('resolvedName ?? "Leader_Device_LoRa"', 'resolvedName ?? "Unknown"');
+text = text.replaceAll('resolvedName ?? "Leader_Device"', 'resolvedName ?? "Unknown"');
 
 writeFileSync(file, newline === "\r\n" ? text.replaceAll("\n", "\r\n") : text);
 console.log("Updated the iOS Bluetooth plugin so it can find Leader_Device_LoRa.");

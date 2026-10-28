@@ -27,6 +27,8 @@ class FakeCentral implements NativeCentral {
     this.requestOptions = options;
     return { deviceId: "iphone-beacon", name: BLE_NAME_PREFIX };
   }
+  requestLEScan?: NativeCentral["requestLEScan"];
+  stopLEScan?: NativeCentral["stopLEScan"];
   async getDevices(deviceIds: string[]): Promise<{ deviceId: string; name?: string }[]> {
     return this.known.filter((device) => deviceIds.includes(device.deviceId));
   }
@@ -126,6 +128,25 @@ describe("NativeBleTransport", () => {
     await link.writeCommand({ type: CmdType.CHECK_IN, targetId: 2, thresholdMeters: 0 });
     assert.deepEqual(central.writtenTo, [LIVE_RX_UUID]);
     assert.deepEqual([...central.writes[0]], [...encodeCommand({ type: CmdType.CHECK_IN, targetId: 2, thresholdMeters: 0 })]);
+    await link.disconnect();
+  });
+
+  it("connects the named leader and skips unnamed scan results", async () => {
+    const central = new FakeCentral();
+    let stopped = false;
+    central.requestLEScan = async (_options, callback) => {
+      callback({ device: { deviceId: "headphones" } });
+      callback({ device: { deviceId: "other", name: "Something Else" }, localName: "Something Else" });
+      callback({ device: { deviceId: "leader" }, localName: BLE_NAME_PREFIX });
+    };
+    central.stopLEScan = async () => {
+      stopped = true;
+    };
+    const link = new NativeBleTransport(central);
+    await link.connect();
+    assert.equal(central.requestCount, 0);
+    assert.equal(stopped, true);
+    assert.equal(rememberedNativeBeaconName(), BLE_NAME_PREFIX);
     await link.disconnect();
   });
 

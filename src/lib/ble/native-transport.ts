@@ -61,6 +61,11 @@ interface NativeDevice {
   name?: string;
 }
 
+interface NativeScanResult {
+  device: NativeDevice;
+  localName?: string;
+}
+
 /**
  * The slice of @capacitor-community/bluetooth-le this app uses.
  * Tests pass a fake. The phone build uses BleClient.
@@ -75,6 +80,15 @@ export interface NativeCentral {
     namePrefix?: string;
     displayMode?: "alert" | "list";
   }): Promise<NativeDevice>;
+  requestLEScan?(
+    options: {
+      namePrefix?: string;
+      optionalServices?: string[];
+      allowDuplicates?: boolean;
+    },
+    callback: (result: NativeScanResult) => void,
+  ): Promise<void>;
+  stopLEScan?(): Promise<void>;
   getDevices(deviceIds: string[]): Promise<NativeDevice[]>;
   connect(
     deviceId: string,
@@ -182,12 +196,50 @@ export class NativeBleTransport implements BleTransport {
   }
 
   private async pickDevice(central: NativeCentral): Promise<NativeDevice> {
-    // This sketch calls getAdvertising()->start() without addServiceUUID, so
-    // the packet only carries the name from BLEDevice::init("Leader_Device_LoRa").
+    // The iOS device list added a row for every unnamed peripheral and labeled
+    // it Leader_Device_LoRa. Taps never landed because the list kept reloading.
+    // Scan quietly and connect the board that actually advertises this name.
+    if (central.requestLEScan && central.stopLEScan) {
+      return this.scanForLeader(central);
+    }
     return central.requestDevice({
       namePrefix: BLE_NAME_PREFIX,
       optionalServices: [LIVE_SERVICE_UUID],
       displayMode: "list",
+    });
+  }
+
+  private scanForLeader(central: NativeCentral): Promise<NativeDevice> {
+    const scan = central.requestLEScan?.bind(central);
+    const stop = central.stopLEScan?.bind(central);
+    if (!scan || !stop) {
+      return Promise.reject(new Error(`No ${BLE_NAME_PREFIX} in range. Is the ESP32 advertising?`));
+    }
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (device?: NativeDevice, error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        void stop().catch(() => undefined);
+        if (device) resolve(device);
+        else reject(error ?? new Error(`No ${BLE_NAME_PREFIX} in range. Is the ESP32 advertising?`));
+      };
+      const timer = setTimeout(() => {
+        finish(undefined, new Error(`No ${BLE_NAME_PREFIX} in range. Is the ESP32 advertising?`));
+      }, 12000);
+      void scan(
+        {
+          namePrefix: BLE_NAME_PREFIX,
+          optionalServices: [LIVE_SERVICE_UUID],
+          allowDuplicates: false,
+        },
+        (result) => {
+          const name = result.localName || result.device.name || "";
+          if (!name.startsWith(BLE_NAME_PREFIX)) return;
+          finish({ deviceId: result.device.deviceId, name });
+        },
+      ).catch((error: unknown) => finish(undefined, explainBleError(error)));
     });
   }
 
