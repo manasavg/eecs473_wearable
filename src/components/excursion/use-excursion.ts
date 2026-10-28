@@ -58,6 +58,18 @@ export function useExcursion() {
     [client],
   );
 
+  const setRange = useCallback(
+    async (meters: number) => {
+      client.setThreshold(meters);
+      try {
+        await client.writeThreshold();
+      } catch {
+        // The client stores the message on state.error.
+      }
+    },
+    [client],
+  );
+
   return {
     state,
     rememberedName,
@@ -65,6 +77,7 @@ export function useExcursion() {
     connectBeacon,
     leave,
     checkIn,
+    setRange,
     dismissError: () => client.dismissError(),
   };
 }

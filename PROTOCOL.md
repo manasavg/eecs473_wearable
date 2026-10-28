@@ -13,7 +13,9 @@ The phone talks only to the leader Heltec, over BLE. Each NEO-6M TX pin is wired
 | TX notify | `209989cd-1fc7-4eb1-979e-690ba55053da` |
 | RX write | `0be48bf3-86c4-4d13-8e2c-2ac0a569817c` |
 
-Check-in write is 4 bytes, first byte `1`. The sketch sends LoRa `CHECK IN`.
+Check-in write is 4 bytes: `1`, command `0`, target id, `0`. The sketch sends LoRa `CHECK IN`.
+
+Range write is 5 bytes: `1`, command `1`, target id, uint16 meters little-endian. `500` m is `01 01 ff f4 01`. The sketch stores that limit. It does not treat this write as a check-in.
 
 A follower LoRa message `OK` (or `OK` plus an id) is notified back as the two bytes `OK`. The phone shows They're OK only after that notify.
 
@@ -32,6 +34,8 @@ NEO-6M TX to Heltec GPIO 47, GND to GND, VCC to 5V. Serial2 is 9600 8N1. The ske
 
 `42.5, -83.25` with a lock is `47 01 40 fc 54 19 e0 0e 61 ce`. A later counter byte does not clear the last fix. A packet with fix `0` clears it and the phone shows No fix.
 
+The follower fix uses the same 10-byte layout with marker `F` (`0x46`) instead of `G`. The phone uses the two fixes for a compass bearing. A counter byte does not clear the follower fix. Fix `0` clears it.
+
 ## Follower position
 
 `firmware/follower_device/follower_device.ino`
@@ -42,6 +46,8 @@ Same radio settings as the leader: 915.0 MHz, bandwidth 125, spreading factor 9,
 POS 42.331427 -83.045754
 POS NOFIX
 ```
+
+When the phone has set a range and both fixes are valid, the ping is `PING FAR` if the haversine is greater than that range, otherwise `PING NEAR`. The follower turns its light on for `FAR` and off for `NEAR`. A plain `PING` leaves the light as it is. The phone notifies when the distance it already has crosses that same limit.
 
 The leader stores that fix. If no `POS` arrives for 15 seconds, the follower fix is dropped. When both fixes are valid the leader notifies 5 bytes on TX:
 

@@ -41,12 +41,21 @@ export function clampThreshold(meters: number): number {
 }
 
 export function encodeCommand(command: AppCommand): Uint8Array {
+  if (command.type === CmdType.SET_THRESHOLD) {
+    const meters = clampThreshold(command.thresholdMeters);
+    const bytes = new Uint8Array(5);
+    bytes[0] = PACKET_VERSION;
+    bytes[1] = CmdType.SET_THRESHOLD;
+    bytes[2] = command.targetId & 0xff;
+    bytes[3] = meters & 0xff;
+    bytes[4] = (meters >> 8) & 0xff;
+    return bytes;
+  }
   const bytes = new Uint8Array(COMMAND_PACKET_BYTES);
   bytes[0] = PACKET_VERSION;
   bytes[1] = command.type;
   bytes[2] = command.targetId & 0xff;
-  bytes[3] =
-    command.type === CmdType.SET_THRESHOLD ? clampThreshold(command.thresholdMeters) : 0;
+  bytes[3] = 0;
   return bytes;
 }
 
@@ -56,10 +65,12 @@ export function decodeCommand(bytes: Uint8Array): AppCommand {
   if (type !== CmdType.CHECK_IN && type !== CmdType.SET_THRESHOLD) {
     throw new Error(`Unknown command type ${type}. Expected CHECK_IN (0) or SET_THRESHOLD (1).`);
   }
+  const lo = bytes[3];
+  const hi = type === CmdType.SET_THRESHOLD && bytes.byteLength >= 5 ? bytes[4] : 0;
   return {
     type,
     targetId: bytes[2],
-    thresholdMeters: bytes[3],
+    thresholdMeters: type === CmdType.SET_THRESHOLD ? clampThreshold(lo | (hi << 8)) : lo,
   };
 }
 

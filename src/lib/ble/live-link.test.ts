@@ -116,6 +116,20 @@ describe("parseLiveNotify", () => {
     if (event.type === "live") assert.equal(event.separation?.meters, 12.34);
   });
 
+  it("reads the follower fix the leader notifies", () => {
+    const sample = parseLiveNotify(positionPacket(0x46, true, 42.33, -83.04));
+    assert.equal(sample.followerGps?.fix, true);
+    assert.equal(sample.followerGps?.lat, 42.33);
+    assert.equal(sample.followerGps?.lon, -83.04);
+    assert.equal(sample.gps, null);
+    const [event] = eventsFromNotify(positionPacket(0x46, false, 0, 0));
+    assert.equal(event.type, "live");
+    if (event.type === "live") {
+      assert.equal(event.followerGps?.fix, false);
+      assert.equal(event.gps, null);
+    }
+  });
+
   it("reads a distance packet with no fix", () => {
     const sample = parseLiveNotify(new Uint8Array([0x4d, 0xff, 0xff, 0xff, 0xff]));
     assert.equal(sample.separation?.known, false);
@@ -132,9 +146,13 @@ function separationPacket(meters: number): Uint8Array {
 }
 
 function gpsPacket(fix: boolean, lat: number, lon: number): Uint8Array {
+  return positionPacket(0x47, fix, lat, lon);
+}
+
+function positionPacket(marker: number, fix: boolean, lat: number, lon: number): Uint8Array {
   const bytes = new Uint8Array(10);
   const view = new DataView(bytes.buffer);
-  bytes[0] = 0x47;
+  bytes[0] = marker;
   bytes[1] = fix ? 1 : 0;
   view.setInt32(2, Math.round(lat * 1e7), true);
   view.setInt32(6, Math.round(lon * 1e7), true);

@@ -49,13 +49,16 @@ function follower(overrides: Partial<FollowerInfo> = {}): FollowerInfo {
 }
 
 describe("ExcursionAppClient", () => {
-  it("connects without writing, so the LoRa board does not send CHECK IN", async () => {
+  it("sends the range on connect and does not send CHECK IN", async () => {
     const transport = new ScriptedTransport();
     const client = new ExcursionAppClient({ thresholdMeters: 25 });
     await client.connectDevice("beacon", transport);
     assert.equal(client.getState().connection, "connected");
     assert.equal(client.getState().deviceName, "Test beacon");
-    assert.equal(transport.commands.length, 0);
+    assert.equal(transport.commands.length, 1);
+    assert.equal(transport.commands[0]?.type, CmdType.SET_THRESHOLD);
+    assert.equal(transport.commands[0]?.thresholdMeters, 25);
+    assert.ok(transport.commands.every((command) => command.type !== CmdType.CHECK_IN));
     await client.disconnect();
   });
 
@@ -159,6 +162,45 @@ describe("ExcursionAppClient", () => {
     });
     assert.equal(client.getState().separationKnown, false);
     assert.equal(client.getState().separationM, null);
+    assert.equal(client.getState().outOfRange, false);
+    await client.disconnect();
+  });
+
+  it("keeps the follower fix and marks out of range past the limit", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ thresholdMeters: 40 });
+    await client.connectDevice("beacon", transport);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "46",
+      followerGps: { fix: true, lat: 42.4, lon: -83.2 },
+    });
+    assert.equal(client.getState().followerFix, true);
+    assert.equal(client.getState().followerLat, 42.4);
+    transport.emit({ type: "live", counter: 3, text: null, hex: "03" });
+    assert.equal(client.getState().followerLon, -83.2);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "4d",
+      separation: { known: true, meters: 55 },
+    });
+    assert.equal(client.getState().outOfRange, true);
+    client.setThreshold(80);
+    assert.equal(client.getState().outOfRange, false);
+    assert.equal(client.getState().thresholdMeters, 80);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "46 00",
+      followerGps: { fix: false, lat: null, lon: null },
+    });
+    assert.equal(client.getState().followerFix, false);
+    assert.equal(client.getState().followerLat, null);
     await client.disconnect();
   });
 

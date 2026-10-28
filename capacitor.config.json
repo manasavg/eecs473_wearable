@@ -13,6 +13,9 @@
         "availableDevices": "Beacons",
         "noDeviceFound": "No Leader_Device_LoRa in range. Is the ESP32 advertising?"
       }
+    },
+    "LocalNotifications": {
+      "presentationOptions": ["banner", "list", "sound", "badge"]
     }
   }
 }

@@ -16,6 +16,7 @@ import type { FollowerInfo } from "./types";
  * packet after the follower's position arrives over LoRa:
  *
  *   'G', fix (0 or 1), int32 latitude * 1e7, int32 longitude * 1e7
+ *   'F', fix (0 or 1), int32 latitude * 1e7, int32 longitude * 1e7
  *   'M', uint32 centimeters, little-endian. 0xFFFFFFFF means no distance.
  *
  * Both integers are little-endian. A fix byte of 0 means the module has
@@ -29,7 +30,7 @@ import type { FollowerInfo } from "./types";
  * can start carrying wristbands without another app change.
  */
 
-/** 'G' plus fix byte plus two int32 microdegrees. */
+/** 'G' or 'F' plus fix byte plus two int32 microdegrees. */
 export const GPS_PACKET_BYTES = 10;
 
 /** 'M' plus uint32 centimeters. */
@@ -54,6 +55,8 @@ export interface LiveNotify {
   leaderBattery: number | null;
   /** Leader NEO-6M position, when this notify is a GPS packet. */
   gps: GpsFix | null;
+  /** Follower NEO-6M position, when this notify is an F packet. */
+  followerGps: GpsFix | null;
   /** Meters between the two GPS fixes, when this notify is a distance packet. */
   separation: Separation | null;
 }
@@ -67,6 +70,7 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
     follower: null,
     leaderBattery: null,
     gps: null,
+    followerGps: null,
     separation: null,
   };
 
@@ -87,7 +91,11 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
   }
 
   if (bytes.length === GPS_PACKET_BYTES && bytes[0] === 0x47) {
-    return { ...base, gps: decodeGps(bytes) };
+    return { ...base, gps: decodeLatLon(bytes) };
+  }
+
+  if (bytes.length === GPS_PACKET_BYTES && bytes[0] === 0x46) {
+    return { ...base, followerGps: decodeLatLon(bytes) };
   }
 
   if (bytes.length === SEPARATION_PACKET_BYTES && bytes[0] === 0x4d) {
@@ -127,6 +135,7 @@ export function eventsFromNotify(bytes: Uint8Array): BleEvent[] {
     text: sample.text,
     hex: sample.hex,
     gps: sample.gps,
+    followerGps: sample.followerGps,
     separation: sample.separation,
   });
   return events;
@@ -143,7 +152,7 @@ function decodeSeparation(bytes: Uint8Array): Separation {
   return { known: true, meters: cm / 100 };
 }
 
-function decodeGps(bytes: Uint8Array): GpsFix {
+function decodeLatLon(bytes: Uint8Array): GpsFix {
   const locked = bytes[1] === 1;
   if (!locked) return { fix: false, lat: null, lon: null };
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);

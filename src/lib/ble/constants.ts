@@ -5,5 +5,5 @@ export const PACKET_VERSION = 1;
 export const BROADCAST_ID = 0xff;
 
 export const DEFAULT_THRESHOLD_M = 40;
-export const THRESHOLD_MIN_M = 5;
-export const THRESHOLD_MAX_M = 40;
+export const THRESHOLD_MIN_M = 1;
+export const THRESHOLD_MAX_M = 2000;

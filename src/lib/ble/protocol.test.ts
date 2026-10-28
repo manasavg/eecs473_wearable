@@ -46,17 +46,33 @@ describe("command packets", () => {
       targetId: BROADCAST_ID,
       thresholdMeters: 25,
     });
-    assert.deepEqual([...bytes], [PACKET_VERSION, CmdType.SET_THRESHOLD, 0xff, 25]);
+    assert.deepEqual([...bytes], [PACKET_VERSION, CmdType.SET_THRESHOLD, 0xff, 25, 0]);
     assert.equal(decodeCommand(bytes).thresholdMeters, 25);
   });
 
-  it("clamps the separation line to the UWB ceiling", () => {
+  it("encodes a threshold above 255 m as a little-endian uint16", () => {
     const bytes = encodeCommand({
       type: CmdType.SET_THRESHOLD,
       targetId: BROADCAST_ID,
-      thresholdMeters: 80,
+      thresholdMeters: 500,
     });
-    assert.equal(bytes[3], 40);
+    assert.deepEqual([...bytes], [PACKET_VERSION, CmdType.SET_THRESHOLD, 0xff, 500 & 0xff, 500 >> 8]);
+    assert.equal(decodeCommand(bytes).thresholdMeters, 500);
+  });
+
+  it("clamps the range to 1–2000 m", () => {
+    const high = encodeCommand({
+      type: CmdType.SET_THRESHOLD,
+      targetId: BROADCAST_ID,
+      thresholdMeters: 9000,
+    });
+    assert.equal(decodeCommand(high).thresholdMeters, 2000);
+    const low = encodeCommand({
+      type: CmdType.SET_THRESHOLD,
+      targetId: BROADCAST_ID,
+      thresholdMeters: 0,
+    });
+    assert.equal(decodeCommand(low).thresholdMeters, 1);
   });
 });
 

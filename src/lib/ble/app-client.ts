@@ -1,3 +1,4 @@
+import { isOutOfRange } from "../geo";
 import { BROADCAST_ID, DEFAULT_THRESHOLD_M } from "./constants";
 import { createTransport, type LinkMode } from "./create-transport";
 import { isFollowerOkSignal } from "./live-link";
@@ -99,6 +100,12 @@ export interface AppState {
   /** Null until the first distance packet. False when either GPS has no fix. */
   separationKnown: boolean | null;
   separationM: number | null;
+  /** Follower NEO-6M. Null until the first F packet. */
+  followerFix: boolean | null;
+  followerLat: number | null;
+  followerLon: number | null;
+  /** True when the known distance is farther than thresholdMeters. */
+  outOfRange: boolean;
 }
 
 export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppState {
@@ -121,6 +128,10 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
     gpsLon: null,
     separationKnown: null,
     separationM: null,
+    followerFix: null,
+    followerLat: null,
+    followerLon: null,
+    outOfRange: false,
   };
 }
 
@@ -170,6 +181,7 @@ export class ExcursionAppClient {
 
     try {
       await link.connect(remembered);
+      await this.writeThreshold();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not connect.";
       const failed = this.transport;
@@ -198,9 +210,14 @@ export class ExcursionAppClient {
     }
   }
 
-  /** Local slider updates. The beacon is told from `writeThreshold`. */
+  /** Local range. The beacon is told from `writeThreshold`. */
   setThreshold(meters: number): void {
-    this.commit({ ...this.state, thresholdMeters: clampThreshold(meters) });
+    const thresholdMeters = clampThreshold(meters);
+    this.commit({
+      ...this.state,
+      thresholdMeters,
+      outOfRange: isOutOfRange(this.state.separationKnown, this.state.separationM, thresholdMeters),
+    });
   }
 
   async writeThreshold(): Promise<void> {
@@ -309,7 +326,10 @@ export class ExcursionAppClient {
         const now = Date.now();
         const followerOk = isFollowerOkSignal(event.text);
         const gps = event.gps;
+        const followerGps = event.followerGps;
         const separation = event.separation;
+        const separationKnown = separation ? separation.known : this.state.separationKnown;
+        const separationM = separation ? separation.meters : this.state.separationM;
         this.commit(
           {
             ...this.state,
@@ -318,8 +338,12 @@ export class ExcursionAppClient {
             gpsFix: gps ? gps.fix : this.state.gpsFix,
             gpsLat: gps ? gps.lat : this.state.gpsLat,
             gpsLon: gps ? gps.lon : this.state.gpsLon,
-            separationKnown: separation ? separation.known : this.state.separationKnown,
-            separationM: separation ? separation.meters : this.state.separationM,
+            followerFix: followerGps ? followerGps.fix : this.state.followerFix,
+            followerLat: followerGps ? followerGps.lat : this.state.followerLat,
+            followerLon: followerGps ? followerGps.lon : this.state.followerLon,
+            separationKnown,
+            separationM,
+            outOfRange: isOutOfRange(separationKnown, separationM, this.state.thresholdMeters),
             liveLink: {
               counter: event.counter ?? this.state.liveLink?.counter ?? null,
               text: event.text ?? this.state.liveLink?.text ?? null,

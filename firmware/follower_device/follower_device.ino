@@ -55,6 +55,22 @@ unsigned long lastScrMs = 0;
 bool gpsFix = false;
 double gpsLat = 0;
 double gpsLon = 0;
+bool rangeAlarm = false;
+
+void showRangeLight() {
+  if (rangeAlarm) {
+    rgbLedWrite(BOARD_LED, 255, 0, 0);
+    digitalWrite(RX_LED_PIN, HIGH);
+  } else {
+    rgbLedWrite(BOARD_LED, 0, 0, 0);
+    digitalWrite(RX_LED_PIN, LOW);
+  }
+}
+
+void applyRangeAlarm(bool on) {
+  rangeAlarm = on;
+  if (!radioTx && !rxLedActive) showRangeLight();
+}
 
 U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(OLED_SCL, OLED_SDA, OLED_RST);
 SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
@@ -113,7 +129,7 @@ bool startLoRa(const char *msg) {
   int txState = radio.startTransmit(msg);
   if (txState != RADIOLIB_ERR_NONE) {
     digitalWrite(FEM_PA, LOW);
-    rgbLedWrite(BOARD_LED, 0, 0, 0);
+    showRangeLight();
     Serial.print(" -> TX start failed, code: ");
     Serial.println(txState);
     radio.startReceive();
@@ -141,6 +157,7 @@ void finishTxIfDone() {
   rgbLedWrite(BOARD_LED, 0, 0, 0);
   radioTx = false;
   Serial.println(" -> TX done");
+  showRangeLight();
   radio.startReceive();
 }
 
@@ -358,14 +375,17 @@ void loop() {
         printScreen("CHECK IN", "", "");
         drawScreen();
       }
-      if (upper == "PING") sendPosition();
+      if (upper == "PING" || upper.startsWith("PING ")) {
+        sendPosition();
+        if (upper.indexOf(" FAR") >= 0) applyRangeAlarm(true);
+        else if (upper.indexOf(" NEAR") >= 0) applyRangeAlarm(false);
+      }
     }
   }
 
   if (rxLedActive && (millis() - rxLedOnTime >= rxLedDuration)) {
-    rgbLedWrite(BOARD_LED, 0, 0, 0);
-    digitalWrite(RX_LED_PIN, LOW);
     rxLedActive = false;
+    showRangeLight();
   }
 
   if ((millis() - lastDebounceTime) > debounceDelay && digitalRead(BTN_OK_PIN) == LOW) {

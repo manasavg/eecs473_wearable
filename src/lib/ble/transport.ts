@@ -20,6 +20,7 @@ export type BleEvent =
       text: string | null;
       hex: string;
       gps?: { fix: boolean; lat: number | null; lon: number | null } | null;
+      followerGps?: { fix: boolean; lat: number | null; lon: number | null } | null;
       separation?: { known: boolean; meters: number | null } | null;
     };
 

@@ -26,6 +26,8 @@
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Excursion connects to the Leader_Device_LoRa beacon.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Excursion uses the compass to point you toward the follower.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

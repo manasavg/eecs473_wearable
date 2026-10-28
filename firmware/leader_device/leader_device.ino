@@ -70,6 +70,7 @@ double followerLat = 0;
 double followerLon = 0;
 unsigned long followerPosMs = 0;
 const unsigned long FOLLOWER_POS_TTL_MS = 15000;
+uint16_t rangeLimitM = 0;
 unsigned long lastSepNotifyMs = 0;
 bool lastSepKnown = false;
 double lastSepMeters = -1;
@@ -233,7 +234,14 @@ class MyCallbacks : public BLECharacteristicCallbacks {
       for (unsigned int n = 0; n < rxValue.length(); n++) {
         Serial.print((uint8_t)rxValue[n]);
       }
-      if ((uint8_t)rxValue[0] == 1) {
+      // Check-in is [1, 0, id, 0]. Range is [1, 1, id, meters lo, meters hi].
+      if (rxValue.length() >= 4 && (uint8_t)rxValue[0] == 1 && (uint8_t)rxValue[1] == 1) {
+        uint16_t meters = (uint8_t)rxValue[3];
+        if (rxValue.length() >= 5) meters |= (uint16_t)(uint8_t)rxValue[4] << 8;
+        if (meters < 1) meters = 1;
+        if (meters > 2000) meters = 2000;
+        rangeLimitM = meters;
+      } else if ((uint8_t)rxValue[0] == 1) {
         check = true;
       }
       Serial.println();
@@ -280,6 +288,30 @@ void notifyGps(bool fix, double lat, double lon) {
   }
   uint8_t pkt[10];
   pkt[0] = 'G';
+  pkt[1] = fix ? 1 : 0;
+  pkt[2] = (uint8_t)(latE7 & 0xFF);
+  pkt[3] = (uint8_t)((latE7 >> 8) & 0xFF);
+  pkt[4] = (uint8_t)((latE7 >> 16) & 0xFF);
+  pkt[5] = (uint8_t)((latE7 >> 24) & 0xFF);
+  pkt[6] = (uint8_t)(lonE7 & 0xFF);
+  pkt[7] = (uint8_t)((lonE7 >> 8) & 0xFF);
+  pkt[8] = (uint8_t)((lonE7 >> 16) & 0xFF);
+  pkt[9] = (uint8_t)((lonE7 >> 24) & 0xFF);
+  bleNotify(pkt, 10);
+}
+
+// 'F', same layout as the leader GPS packet. This is the follower fix.
+void notifyFollower(bool fix, double lat, double lon) {
+  int32_t latE7 = 0;
+  int32_t lonE7 = 0;
+  if (fix) {
+    double latScaled = lat * 10000000.0;
+    double lonScaled = lon * 10000000.0;
+    latE7 = (int32_t)(latScaled >= 0 ? latScaled + 0.5 : latScaled - 0.5);
+    lonE7 = (int32_t)(lonScaled >= 0 ? lonScaled + 0.5 : lonScaled - 0.5);
+  }
+  uint8_t pkt[10];
+  pkt[0] = 'F';
   pkt[1] = fix ? 1 : 0;
   pkt[2] = (uint8_t)(latE7 & 0xFF);
   pkt[3] = (uint8_t)((latE7 >> 8) & 0xFF);
@@ -679,12 +711,22 @@ void loop() {
   if (millis() - lastPhoneMs >= PHONE_EVERY_MS) {
     lastPhoneMs = millis();
     notifyGps(selfFix, selfLat, selfLon);
+    notifyFollower(followerFix, followerLat, followerLon);
     refreshDistance();
+  }
+
+  if (followerFix && followerPosMs != 0 && millis() - followerPosMs > FOLLOWER_POS_TTL_MS) {
+    followerFix = false;
   }
 
   if (!radioTx && !pendingMsgReady && millis() - lastPingMs >= PING_EVERY_MS) {
     lastPingMs = millis();
-    startLoRa("PING");
+    const char *ping = "PING";
+    if (rangeLimitM > 0 && selfFix && followerFix) {
+      double meters = haversineMeters(selfLat, selfLon, followerLat, followerLon);
+      ping = meters > (double)rangeLimitM ? "PING FAR" : "PING NEAR";
+    }
+    startLoRa(ping);
   }
 
   if (!deviceConnected && oldDeviceConnected && !advRestartPending) {

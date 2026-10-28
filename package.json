@@ -10,11 +10,12 @@
     "build:ios": "CAPACITOR=1 next build",
     "postinstall": "node scripts/patch-ble-ios.mjs",
     "cap:sync": "npm run build:ios && node scripts/patch-ble-ios.mjs && npx cap sync ios",
-    "test": "node --import tsx --test src/lib/ble/protocol.test.ts src/lib/ble/live-link.test.ts src/lib/ble/app-client.test.ts src/lib/ble/native-transport.test.ts"
+    "test": "node --import tsx --test src/lib/geo.test.ts src/lib/ble/protocol.test.ts src/lib/ble/live-link.test.ts src/lib/ble/app-client.test.ts src/lib/ble/native-transport.test.ts"
   },
   "dependencies": {
     "@capacitor-community/bluetooth-le": "8.3.0",
     "@capacitor/core": "^8.5.2",
+    "@capacitor/local-notifications": "^8.3.1",
     "next": "15.5.27",
     "react": "19.1.0",
     "react-dom": "19.1.0"
