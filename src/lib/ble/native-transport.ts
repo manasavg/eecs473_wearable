@@ -30,6 +30,14 @@ import {
 const RECONNECT_ATTEMPTS = 3;
 const DEVICE_ID_KEY = "excursion.nativeDeviceId";
 const DEVICE_NAME_KEY = "excursion.nativeDeviceName";
+const LEGACY_NAME = "Leader_Device_LoRa";
+
+/**
+ * initialize() builds a new iOS Bluetooth controller. Calling it again after a
+ * scan drops the boards that scan found, and connect then waits until timeout.
+ * One controller per central for the life of the page.
+ */
+const preparedCentrals = new WeakSet<object>();
 
 const DISPLAY = {
   scanning: `Looking for ${BLE_NAME_PREFIX}…`,
@@ -141,19 +149,13 @@ export class NativeBleTransport implements BleTransport {
   }
 
   /**
-   * @param remembered  Reconnect the last beacon without the device list.
-   */
-  /**
    * Report every board advertising Excursion_. Does not connect.
    * Call stopScan before connecting, or the phone drops the new link.
    */
   async scan(onPeer: (peer: BlePeer) => void): Promise<void> {
     const central = this.injected ?? (await loadCapacitorBle());
     this.central = central;
-    await central.initialize({ androidNeverForLocation: true });
-    if (!(await central.isEnabled())) {
-      throw new Error("Bluetooth is off. Turn it on, then look again.");
-    }
+    await prepareCentral(central);
     await central.setDisplayStrings?.(DISPLAY);
     await central.stopLEScan?.().catch(() => undefined);
     if (!central.requestLEScan) {
@@ -167,13 +169,14 @@ export class NativeBleTransport implements BleTransport {
     }
     await central.requestLEScan(
       {
-        namePrefix: BLE_NAME_PREFIX,
         optionalServices: [LIVE_SERVICE_UUID],
-        allowDuplicates: false,
+        // Keep listening. The first packet often has no name, and iOS will not
+        // deliver another if duplicates are suppressed.
+        allowDuplicates: true,
       },
       (result) => {
-        const name = result.localName || result.device.name || "";
-        if (!name.startsWith(BLE_NAME_PREFIX)) return;
+        const name = boardName(result);
+        if (!isBoardName(name)) return;
         onPeer({ deviceId: result.device.deviceId, name });
       },
     );
@@ -188,10 +191,7 @@ export class NativeBleTransport implements BleTransport {
     const central = this.injected ?? (await loadCapacitorBle());
     this.central = central;
     try {
-      await central.initialize({ androidNeverForLocation: true });
-      if (!(await central.isEnabled())) {
-        throw new Error("Bluetooth is off. Turn it on, then connect again.");
-      }
+      await prepareCentral(central);
       await central.setDisplayStrings?.(DISPLAY);
       await this.stopScan();
       const device = peer
@@ -275,13 +275,12 @@ export class NativeBleTransport implements BleTransport {
       }, 12000);
       void scan(
         {
-          namePrefix: BLE_NAME_PREFIX,
           optionalServices: [LIVE_SERVICE_UUID],
-          allowDuplicates: false,
+          allowDuplicates: true,
         },
         (result) => {
-          const name = result.localName || result.device.name || "";
-          if (!name.startsWith(BLE_NAME_PREFIX)) return;
+          const name = boardName(result);
+          if (!isBoardName(name)) return;
           finish({ deviceId: result.device.deviceId, name });
         },
       ).catch((error: unknown) => finish(undefined, explainBleError(error)));
@@ -409,6 +408,26 @@ export class NativeBleTransport implements BleTransport {
   private emit(event: BleEvent): void {
     for (const listener of this.listeners) listener(event);
   }
+}
+
+async function prepareCentral(central: NativeCentral): Promise<void> {
+  if (!preparedCentrals.has(central)) {
+    await central.initialize({ androidNeverForLocation: true });
+    preparedCentrals.add(central);
+  }
+  if (!(await central.isEnabled())) {
+    throw new Error("Bluetooth is off. Turn it on, then look again.");
+  }
+}
+
+function boardName(result: NativeScanResult): string {
+  // The advertisement is the name the board is sending now. peripheral.name
+  // can still be Leader_Device_LoRa from the last time this phone connected.
+  return result.localName || result.device.name || "";
+}
+
+function isBoardName(name: string): boolean {
+  return name.startsWith(BLE_NAME_PREFIX) || name.startsWith(LEGACY_NAME);
 }
 
 async function loadCapacitorBle(): Promise<NativeCentral> {

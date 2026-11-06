@@ -18,7 +18,11 @@ class FakeCentral implements NativeCentral {
   private notify: ((value: DataView) => void) | null = null;
   known: { deviceId: string; name?: string }[] = [];
 
-  async initialize(): Promise<void> {}
+  initCount = 0;
+
+  async initialize(): Promise<void> {
+    this.initCount += 1;
+  }
   async isEnabled(): Promise<boolean> {
     return true;
   }
@@ -174,6 +178,26 @@ describe("NativeBleTransport", () => {
     assert.equal(central.connectedId, "board-b");
     assert.equal(stopped, true);
     assert.equal(rememberedNativeBeaconName(), `${BLE_NAME_PREFIX}1F`);
+    await link.disconnect();
+  });
+
+  it("connects a scanned board without starting Bluetooth over again", async () => {
+    const central = new FakeCentral();
+    central.requestLEScan = async (_options, callback) => {
+      callback({
+        device: { deviceId: "board-89", name: "Leader_Device_LoRa" },
+        localName: `${BLE_NAME_PREFIX}89`,
+      });
+    };
+    central.stopLEScan = async () => {};
+    const scanner = new NativeBleTransport(central);
+    const names: string[] = [];
+    await scanner.scan((peer) => names.push(peer.name));
+    const link = new NativeBleTransport(central);
+    await link.connect(false, { deviceId: "board-89", name: names[0] });
+    assert.deepEqual(names, [`${BLE_NAME_PREFIX}89`]);
+    assert.equal(central.initCount, 1);
+    assert.equal(central.connectedId, "board-89");
     await link.disconnect();
   });
 

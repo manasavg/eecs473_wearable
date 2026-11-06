@@ -26,7 +26,8 @@ let text = original.replaceAll("\r\n", "\n");
 
 const applied =
   text.includes("let servicesToScan: [CBUUID]? = serviceUUIDs.isEmpty ? nil : serviceUUIDs") &&
-  text.includes("let resolvedName = peripheral.name ?? advertisedName") &&
+  (text.includes("let resolvedName = peripheral.name ?? advertisedName") ||
+    text.includes("let resolvedName = advertisedName ?? peripheral.name")) &&
   text.includes("self.stopScan()\n        self.centralManager.connect");
 
 const nameFilter = `    private func passesNamePrefixFilter(peripheralName: String?) -> Bool {
@@ -119,6 +120,11 @@ if (text.includes(nameFilterFixed)) {
 
 text = text.replaceAll('resolvedName ?? "Leader_Device_LoRa"', 'resolvedName ?? "Unknown"');
 text = text.replaceAll('resolvedName ?? "Leader_Device"', 'resolvedName ?? "Unknown"');
+// iOS caches the name from the last connection. The packet is the current name.
+text = text.replaceAll(
+  "let resolvedName = peripheral.name ?? advertisedName",
+  "let resolvedName = advertisedName ?? peripheral.name",
+);
 
 writeFileSync(file, newline === "\r\n" ? text.replaceAll("\n", "\r\n") : text);
 console.log("Updated the iOS Bluetooth plugin so it can find Leader_Device_LoRa.");
