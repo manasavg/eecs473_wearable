@@ -1,9 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 
-const TITLE = "Follower is out of range";
-
-export function outOfRangeBody(meters: number, limitMeters: number): string {
-  return `They are ${Math.round(meters)} m away. The limit is ${limitMeters} m.`;
+export function outOfRangeBody(meters: number, limitMeters: number, who = "Follower"): string {
+  return `${who} is ${Math.round(meters)} m away. The limit is ${limitMeters} m.`;
 }
 
 /** Ask while the tap is still the user gesture. Later alerts only fire if this was granted. */
@@ -22,8 +20,13 @@ export async function ensureNotifyPermission(): Promise<void> {
   if (Notification.permission === "default") await Notification.requestPermission();
 }
 
-export async function notifyOutOfRange(meters: number, limitMeters: number): Promise<void> {
-  const body = outOfRangeBody(meters, limitMeters);
+export async function notifyOutOfRange(
+  meters: number,
+  limitMeters: number,
+  who = "Follower",
+): Promise<void> {
+  const title = `${who} is out of range`;
+  const body = outOfRangeBody(meters, limitMeters, who);
   try {
     if (Capacitor.isNativePlatform()) {
       const { LocalNotifications } = await import("@capacitor/local-notifications");
@@ -33,7 +36,7 @@ export async function notifyOutOfRange(meters: number, limitMeters: number): Pro
         notifications: [
           {
             id: (Date.now() % 2147483647) || 1,
-            title: TITLE,
+            title,
             body,
             schedule: { at: new Date(Date.now() + 200) },
           },
@@ -45,5 +48,5 @@ export async function notifyOutOfRange(meters: number, limitMeters: number): Pro
     /* Fall through to the browser notification. */
   }
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-  new Notification(TITLE, { body });
+  new Notification(title, { body });
 }

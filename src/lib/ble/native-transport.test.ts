@@ -32,11 +32,14 @@ class FakeCentral implements NativeCentral {
   async getDevices(deviceIds: string[]): Promise<{ deviceId: string; name?: string }[]> {
     return this.known.filter((device) => deviceIds.includes(device.deviceId));
   }
+  connectedId: string | null = null;
+
   async connect(
-    _deviceId: string,
+    deviceId: string,
     _onDisconnect?: (deviceId: string) => void,
     options?: { timeout?: number; skipDescriptorDiscovery?: boolean },
   ): Promise<void> {
+    this.connectedId = deviceId;
     this.connectOptions = options;
   }
   async disconnect(): Promise<void> {}
@@ -147,6 +150,30 @@ describe("NativeBleTransport", () => {
     assert.equal(central.requestCount, 0);
     assert.equal(stopped, true);
     assert.equal(rememberedNativeBeaconName(), BLE_NAME_PREFIX);
+    await link.disconnect();
+  });
+
+  it("lists the named boards and connects the one you pick", async () => {
+    const central = new FakeCentral();
+    let stopped = false;
+    central.requestLEScan = async (_options, callback) => {
+      callback({ device: { deviceId: "board-a" }, localName: `${BLE_NAME_PREFIX}A3` });
+      callback({ device: { deviceId: "board-a" }, localName: `${BLE_NAME_PREFIX}A3` });
+      callback({ device: { deviceId: "unnamed" } });
+      callback({ device: { deviceId: "board-b", name: "Other" }, localName: `${BLE_NAME_PREFIX}1F` });
+    };
+    central.stopLEScan = async () => {
+      stopped = true;
+    };
+    const link = new NativeBleTransport(central);
+    const names: string[] = [];
+    await link.scan((peer) => names.push(peer.name));
+    assert.deepEqual(names, [`${BLE_NAME_PREFIX}A3`, `${BLE_NAME_PREFIX}A3`, `${BLE_NAME_PREFIX}1F`]);
+    await link.connect(false, { deviceId: "board-b", name: `${BLE_NAME_PREFIX}1F` });
+    assert.equal(central.requestCount, 0);
+    assert.equal(central.connectedId, "board-b");
+    assert.equal(stopped, true);
+    assert.equal(rememberedNativeBeaconName(), `${BLE_NAME_PREFIX}1F`);
     await link.disconnect();
   });
 

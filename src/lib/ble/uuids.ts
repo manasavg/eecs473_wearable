@@ -2,13 +2,13 @@
  * GATT map for the ESP32 sketch in firmware/leader_device/leader_device.ino.
  * The phone is the central. That sketch is the peripheral.
  *
- *   BLEDevice::init("Leader_Device_LoRa");
+ *   BLEDevice::init("Excursion_XX");  // XX is the last Bluetooth MAC byte
  *   SERVICE_UUID           20b723dd-215e-4424-bd75-746a902408bb
  *   CHARACTERISTIC_UUID_RX 0be48bf3-86c4-4d13-8e2c-2ac0a569817c  write
  *   CHARACTERISTIC_UUID_TX 209989cd-1fc7-4eb1-979e-690ba55053da  notify
  *
  * setup() does not add the service UUID to the advertising packet. The phone
- * finds the name Leader_Device_LoRa, then opens this service. loop() notifies
+ * finds names that start with Excursion_, then opens this service. loop() notifies
  * one uint8 on TX every 3 seconds, and a 10-byte GPS fix when the NEO-6M
  * reports RMC or GGA. onWrite on RX treats a first byte of 1 as the flag
  * that transmits LoRa "CHECK IN".
@@ -17,7 +17,7 @@
  * subscribes to them only when the ESP32 adds them to this same service.
  */
 
-export const BLE_NAME_PREFIX = "Leader_Device_LoRa";
+export const BLE_NAME_PREFIX = "Excursion_";
 
 /** Service created by the flashed sketch. It is not in the advertising packet. */
 export const LIVE_SERVICE_UUID = "20b723dd-215e-4424-bd75-746a902408bb";
@@ -47,7 +47,7 @@ export const COMMAND_UUID = `47300005-${UUID_TAIL}`;
 
 const NAME_KEY = "excursion.bleNamePrefix";
 /** Names from earlier sketches. A saved copy of these must not hide the Heltec board. */
-const RETIRED_PREFIXES = ["Excursion", "Leader_Device"];
+const RETIRED_PREFIXES = ["Excursion", "Leader_Device", "Leader_Device_LoRa"];
 
 export function getBleNamePrefix(): string {
   try {

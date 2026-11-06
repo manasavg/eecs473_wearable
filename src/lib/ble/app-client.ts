@@ -3,7 +3,7 @@ import { BROADCAST_ID, DEFAULT_THRESHOLD_M } from "./constants";
 import { createTransport, type LinkMode } from "./create-transport";
 import { isFollowerOkSignal } from "./live-link";
 import { clampThreshold } from "./protocol";
-import type { BleEvent, BleTransport } from "./transport";
+import type { BleEvent, BlePeer, BleTransport } from "./transport";
 import { CmdType, Status, type FollowerInfo, type LabSample } from "./types";
 
 /**
@@ -69,6 +69,17 @@ export interface ActivityEntry {
   message?: string;
 }
 
+/** One of the other boards, tracked by the leader the phone is connected to. */
+export interface TrackedFollower {
+  id: number;
+  fix: boolean | null;
+  lat: number | null;
+  lon: number | null;
+  separationKnown: boolean | null;
+  separationM: number | null;
+  outOfRange: boolean;
+}
+
 /** What the flashed ESP32 sketch is sending right now. */
 export interface LiveLink {
   counter: number | null;
@@ -91,20 +102,23 @@ export interface AppState {
   liveLink: LiveLink | null;
   /** When the check-in write reached the leader. The app is waiting for a follower OK. */
   groupCheckInAt: number | null;
-  /** When the leader notified that a follower pressed OK. No wearable id. */
+  /** When the leader notified that a follower pressed OK. */
   groupOkAt: number | null;
+  /** Board id from that OK, when the radio included one. */
+  groupOkId: number | null;
   /** Null until the first GPS packet. False when the NEO-6M has not locked. */
   gpsFix: boolean | null;
   gpsLat: number | null;
   gpsLon: number | null;
-  /** Null until the first distance packet. False when either GPS has no fix. */
+  /** The other boards. Empty until the leader hears one. */
+  followers: TrackedFollower[];
+  /** Mirrors followers[0] so a single-follower reading still has one distance. */
   separationKnown: boolean | null;
   separationM: number | null;
-  /** Follower NEO-6M. Null until the first F packet. */
   followerFix: boolean | null;
   followerLat: number | null;
   followerLon: number | null;
-  /** True when the known distance is farther than thresholdMeters. */
+  /** True when any follower is farther than thresholdMeters. */
   outOfRange: boolean;
 }
 
@@ -123,9 +137,11 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
     liveLink: null,
     groupCheckInAt: null,
     groupOkAt: null,
+    groupOkId: null,
     gpsFix: null,
     gpsLat: null,
     gpsLon: null,
+    followers: [],
     separationKnown: null,
     separationM: null,
     followerFix: null,
@@ -135,9 +151,47 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
   };
 }
 
+function projectFollowers(state: AppState, followers: TrackedFollower[]): AppState {
+  const primary = followers[0] ?? null;
+  return {
+    ...state,
+    followers,
+    followerFix: primary?.fix ?? null,
+    followerLat: primary?.lat ?? null,
+    followerLon: primary?.lon ?? null,
+    separationKnown: primary?.separationKnown ?? null,
+    separationM: primary?.separationM ?? null,
+    outOfRange: followers.some((follower) => follower.outOfRange),
+  };
+}
+
+function upsertTracked(
+  followers: TrackedFollower[],
+  id: number,
+  patch: Partial<Omit<TrackedFollower, "id" | "outOfRange">>,
+  thresholdMeters: number,
+): TrackedFollower[] {
+  const previous = followers.find((follower) => follower.id === id);
+  const next: TrackedFollower = {
+    id,
+    fix: patch.fix !== undefined ? patch.fix : (previous?.fix ?? null),
+    lat: patch.lat !== undefined ? patch.lat : (previous?.lat ?? null),
+    lon: patch.lon !== undefined ? patch.lon : (previous?.lon ?? null),
+    separationKnown:
+      patch.separationKnown !== undefined ? patch.separationKnown : (previous?.separationKnown ?? null),
+    separationM: patch.separationM !== undefined ? patch.separationM : (previous?.separationM ?? null),
+    outOfRange: false,
+  };
+  next.outOfRange = isOutOfRange(next.separationKnown, next.separationM, thresholdMeters);
+  return [...followers.filter((follower) => follower.id !== id), next].sort((a, b) => a.id - b.id);
+}
+
 export class ExcursionAppClient {
   private state: AppState;
   private transport: BleTransport | null = null;
+  private scanLink: BleTransport | null = null;
+  private scanStop: (() => void) | null = null;
+  private scanGeneration = 0;
   private unsubscribe: (() => void) | null = null;
   private listeners = new Set<(state: AppState) => void>();
   private closing = false;
@@ -158,11 +212,59 @@ export class ExcursionAppClient {
   }
 
   /**
+   * Look for Excursion boards. The callback fires as each one advertises.
+   * Resolves after about 10 seconds, or sooner when connectDevice runs.
+   */
+  async scanForDevices(onPeer: (peer: BlePeer) => void): Promise<void> {
+    await this.stopDeviceScan();
+    const generation = ++this.scanGeneration;
+    const link = createTransport("beacon");
+    this.scanLink = link;
+    if (!link.scan) {
+      this.scanLink = null;
+      return;
+    }
+    try {
+      await link.scan(onPeer);
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 10000);
+        this.scanStop = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+    } finally {
+      if (this.scanGeneration === generation) {
+        this.scanStop = null;
+        this.scanLink = null;
+        await link.stopScan?.();
+      }
+    }
+  }
+
+  async stopDeviceScan(): Promise<void> {
+    this.scanGeneration += 1;
+    const stop = this.scanStop;
+    this.scanStop = null;
+    stop?.();
+    const link = this.scanLink;
+    this.scanLink = null;
+    await link?.stopScan?.();
+  }
+
+  /**
    * Appendix C: connect_device.
    * Pass a transport only from tests. The click handler must call this
    * directly so Web Bluetooth's chooser still counts as a user gesture.
    */
-  async connectDevice(mode: LinkMode, transport?: BleTransport, remembered = false): Promise<void> {
+
+  async connectDevice(
+    mode: LinkMode,
+    transport?: BleTransport,
+    remembered = false,
+    peer?: BlePeer,
+  ): Promise<void> {
+    await this.stopDeviceScan();
     const previous = this.transport;
     this.release();
     // Do not await here. requestDevice() has to stay inside the click gesture.
@@ -180,7 +282,7 @@ export class ExcursionAppClient {
     });
 
     try {
-      await link.connect(remembered);
+      await link.connect(remembered, peer);
       await this.writeThreshold();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not connect.";
@@ -198,6 +300,7 @@ export class ExcursionAppClient {
   }
 
   async disconnect(): Promise<void> {
+    await this.stopDeviceScan();
     if (!this.transport && this.state.mode === "idle") return;
     this.closing = true;
     const threshold = this.state.thresholdMeters;
@@ -213,11 +316,11 @@ export class ExcursionAppClient {
   /** Local range. The beacon is told from `writeThreshold`. */
   setThreshold(meters: number): void {
     const thresholdMeters = clampThreshold(meters);
-    this.commit({
-      ...this.state,
-      thresholdMeters,
-      outOfRange: isOutOfRange(this.state.separationKnown, this.state.separationM, thresholdMeters),
-    });
+    const followers = this.state.followers.map((follower) => ({
+      ...follower,
+      outOfRange: isOutOfRange(follower.separationKnown, follower.separationM, thresholdMeters),
+    }));
+    this.commit(projectFollowers({ ...this.state, thresholdMeters }, followers));
   }
 
   async writeThreshold(): Promise<void> {
@@ -262,7 +365,7 @@ export class ExcursionAppClient {
     }
     const now = Date.now();
     this.commit(
-      { ...this.state, groupCheckInAt: now, groupOkAt: null, error: null },
+      { ...this.state, groupCheckInAt: now, groupOkAt: null, groupOkId: null, error: null },
       { id: nextId(), at: now, kind: "checkin" },
     );
   }
@@ -326,31 +429,52 @@ export class ExcursionAppClient {
         const now = Date.now();
         const followerOk = isFollowerOkSignal(event.text);
         const gps = event.gps;
-        const followerGps = event.followerGps;
-        const separation = event.separation;
-        const separationKnown = separation ? separation.known : this.state.separationKnown;
-        const separationM = separation ? separation.meters : this.state.separationM;
-        this.commit(
-          {
-            ...this.state,
-            lastPacketAt: now,
-            groupOkAt: followerOk ? now : this.state.groupOkAt,
-            gpsFix: gps ? gps.fix : this.state.gpsFix,
-            gpsLat: gps ? gps.lat : this.state.gpsLat,
-            gpsLon: gps ? gps.lon : this.state.gpsLon,
-            followerFix: followerGps ? followerGps.fix : this.state.followerFix,
-            followerLat: followerGps ? followerGps.lat : this.state.followerLat,
-            followerLon: followerGps ? followerGps.lon : this.state.followerLon,
-            separationKnown,
-            separationM,
-            outOfRange: isOutOfRange(separationKnown, separationM, this.state.thresholdMeters),
-            liveLink: {
-              counter: event.counter ?? this.state.liveLink?.counter ?? null,
-              text: event.text ?? this.state.liveLink?.text ?? null,
-              packetCount: (this.state.liveLink?.packetCount ?? 0) + 1,
-              lastHex: event.hex,
+        let followers = this.state.followers;
+        if (event.followerGoneId != null) {
+          followers = followers.filter((follower) => follower.id !== event.followerGoneId);
+        }
+        if (event.followerGps) {
+          followers = upsertTracked(
+            followers,
+            event.followerGps.id ?? 0,
+            {
+              fix: event.followerGps.fix,
+              lat: event.followerGps.lat,
+              lon: event.followerGps.lon,
             },
-          },
+            this.state.thresholdMeters,
+          );
+        }
+        if (event.separation) {
+          followers = upsertTracked(
+            followers,
+            event.separation.id ?? 0,
+            {
+              separationKnown: event.separation.known,
+              separationM: event.separation.meters,
+            },
+            this.state.thresholdMeters,
+          );
+        }
+        this.commit(
+          projectFollowers(
+            {
+              ...this.state,
+              lastPacketAt: now,
+              groupOkAt: followerOk ? now : this.state.groupOkAt,
+              groupOkId: followerOk ? (event.okId ?? null) : this.state.groupOkId,
+              gpsFix: gps ? gps.fix : this.state.gpsFix,
+              gpsLat: gps ? gps.lat : this.state.gpsLat,
+              gpsLon: gps ? gps.lon : this.state.gpsLon,
+              liveLink: {
+                counter: event.counter ?? this.state.liveLink?.counter ?? null,
+                text: event.text ?? this.state.liveLink?.text ?? null,
+                packetCount: (this.state.liveLink?.packetCount ?? 0) + 1,
+                lastHex: event.hex,
+              },
+            },
+            followers,
+          ),
           followerOk ? { id: nextId(), at: now, kind: "answered" } : undefined,
         );
         return;

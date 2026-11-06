@@ -134,8 +134,45 @@ describe("parseLiveNotify", () => {
     const sample = parseLiveNotify(new Uint8Array([0x4d, 0xff, 0xff, 0xff, 0xff]));
     assert.equal(sample.separation?.known, false);
     assert.equal(sample.separation?.meters, null);
+    assert.equal(sample.separation?.id, 0);
+  });
+
+  it("reads a follower fix and distance that name the board", () => {
+    const fix = parseLiveNotify(followerPacket(0xa3, true, 42.33, -83.04));
+    assert.equal(fix.followerGps?.id, 0xa3);
+    assert.equal(fix.followerGps?.fix, true);
+    assert.equal(fix.followerGps?.lat, 42.33);
+    assert.equal(fix.followerGps?.lon, -83.04);
+    const distance = parseLiveNotify(separationFor(0xa3, 12.34));
+    assert.equal(distance.separation?.id, 0xa3);
+    assert.equal(distance.separation?.meters, 12.34);
+    const gone = parseLiveNotify(new Uint8Array([0x58, 0xa3]));
+    assert.equal(gone.followerGoneId, 0xa3);
+    const ok = parseLiveNotify(new Uint8Array([0x4f, 0x4b, 0xa3]));
+    assert.equal(ok.text, "OK");
+    assert.equal(ok.okId, 0xa3);
   });
 });
+
+function followerPacket(id: number, fix: boolean, lat: number, lon: number): Uint8Array {
+  const bytes = new Uint8Array(11);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 0x46;
+  bytes[1] = id;
+  bytes[2] = fix ? 1 : 0;
+  view.setInt32(3, Math.round(lat * 1e7), true);
+  view.setInt32(7, Math.round(lon * 1e7), true);
+  return bytes;
+}
+
+function separationFor(id: number, meters: number): Uint8Array {
+  const bytes = new Uint8Array(6);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 0x4d;
+  bytes[1] = id;
+  view.setUint32(2, Math.round(meters * 100), true);
+  return bytes;
+}
 
 function separationPacket(meters: number): Uint8Array {
   const bytes = new Uint8Array(5);

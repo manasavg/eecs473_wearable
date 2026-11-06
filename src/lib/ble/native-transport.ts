@@ -1,7 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 import { eventsFromNotify } from "./live-link";
 import { encodeCommand, viewToBytes } from "./protocol";
-import type { BleEvent, BleTransport } from "./transport";
+import type { BleEvent, BlePeer, BleTransport } from "./transport";
 import type { AppCommand } from "./types";
 import {
   ALERT_UUID,
@@ -143,7 +143,47 @@ export class NativeBleTransport implements BleTransport {
   /**
    * @param remembered  Reconnect the last beacon without the device list.
    */
-  async connect(remembered = false): Promise<void> {
+  /**
+   * Report every board advertising Excursion_. Does not connect.
+   * Call stopScan before connecting, or the phone drops the new link.
+   */
+  async scan(onPeer: (peer: BlePeer) => void): Promise<void> {
+    const central = this.injected ?? (await loadCapacitorBle());
+    this.central = central;
+    await central.initialize({ androidNeverForLocation: true });
+    if (!(await central.isEnabled())) {
+      throw new Error("Bluetooth is off. Turn it on, then look again.");
+    }
+    await central.setDisplayStrings?.(DISPLAY);
+    await central.stopLEScan?.().catch(() => undefined);
+    if (!central.requestLEScan) {
+      const device = await central.requestDevice({
+        namePrefix: BLE_NAME_PREFIX,
+        optionalServices: [LIVE_SERVICE_UUID],
+        displayMode: "list",
+      });
+      onPeer({ deviceId: device.deviceId, name: device.name || BLE_NAME_PREFIX });
+      return;
+    }
+    await central.requestLEScan(
+      {
+        namePrefix: BLE_NAME_PREFIX,
+        optionalServices: [LIVE_SERVICE_UUID],
+        allowDuplicates: false,
+      },
+      (result) => {
+        const name = result.localName || result.device.name || "";
+        if (!name.startsWith(BLE_NAME_PREFIX)) return;
+        onPeer({ deviceId: result.device.deviceId, name });
+      },
+    );
+  }
+
+  async stopScan(): Promise<void> {
+    await this.central?.stopLEScan?.().catch(() => undefined);
+  }
+
+  async connect(remembered = false, peer?: BlePeer): Promise<void> {
     this.wantLink = true;
     const central = this.injected ?? (await loadCapacitorBle());
     this.central = central;
@@ -153,7 +193,12 @@ export class NativeBleTransport implements BleTransport {
         throw new Error("Bluetooth is off. Turn it on, then connect again.");
       }
       await central.setDisplayStrings?.(DISPLAY);
-      const device = remembered ? await this.savedDevice(central) : await this.pickDevice(central);
+      await this.stopScan();
+      const device = peer
+        ? { deviceId: peer.deviceId, name: peer.name }
+        : remembered
+          ? await this.savedDevice(central)
+          : await this.pickDevice(central);
       await this.open(central, device);
     } catch (error) {
       this.wantLink = false;

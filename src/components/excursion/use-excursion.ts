@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ExcursionAppClient, type AppState } from "@/lib/ble/app-client";
 import { isNativeShell } from "@/lib/ble/create-transport";
 import { rememberedNativeBeaconName } from "@/lib/ble/native-transport";
+import type { BlePeer } from "@/lib/ble/transport";
 import { rememberedBeaconName } from "@/lib/ble/web-bluetooth-transport";
 
 export function useExcursion() {
@@ -14,6 +15,9 @@ export function useExcursion() {
   const [state, setState] = useState<AppState>(() => client.getState());
   const [rememberedName, setRememberedName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [peers, setPeers] = useState<BlePeer[]>([]);
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isNativeShell()) setRememberedName(rememberedNativeBeaconName());
@@ -26,6 +30,39 @@ export function useExcursion() {
       void client.disconnect();
     };
   }, [client]);
+
+  const lookForDevices = useCallback(async () => {
+    setScanning(true);
+    setScanError(null);
+    setPeers([]);
+    try {
+      await client.scanForDevices((peer) => {
+        setPeers((current) => {
+          if (current.some((item) => item.deviceId === peer.deviceId)) return current;
+          return [...current, peer].sort((a, b) => a.name.localeCompare(b.name));
+        });
+      });
+    } catch (error) {
+      setScanError(error instanceof Error ? error.message : "Could not look for devices.");
+    } finally {
+      setScanning(false);
+    }
+  }, [client]);
+
+  const connectPeer = useCallback(
+    async (peer: BlePeer) => {
+      setBusy(true);
+      try {
+        await client.connectDevice("beacon", undefined, false, peer);
+        setRememberedName(peer.name);
+      } catch {
+        // The client stores the message on state.error.
+      } finally {
+        setBusy(false);
+      }
+    },
+    [client],
+  );
 
   const connectBeacon = useCallback(
     async (remembered = false) => {
@@ -74,6 +111,11 @@ export function useExcursion() {
     state,
     rememberedName,
     busy,
+    peers,
+    scanning,
+    scanError,
+    lookForDevices,
+    connectPeer,
     connectBeacon,
     leave,
     checkIn,

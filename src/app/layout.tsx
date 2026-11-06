@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Excursion",
-  description: "LoRa check-in, GPS direction, and an out-of-range alert for the leader phone.",
+  description: "Pick any Excursion board as the leader. The other two stay followers.",
   applicationName: "Excursion",
   appleWebApp: {
     capable: true,

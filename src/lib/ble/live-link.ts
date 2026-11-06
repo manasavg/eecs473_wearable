@@ -9,32 +9,31 @@ import type { BleEvent } from "./transport";
 import type { FollowerInfo } from "./types";
 
 /**
- * Bytes from the ESP32 sketch in firmware/leader_device/leader_device.ino.
+ * Bytes from firmware/excursion_device/excursion_device.ino.
  *
- * The TX characteristic notifies one uint8 every 3 seconds, a 10-byte GPS
- * packet when the leader NEO-6M emits RMC or GGA, and a 5-byte distance
- * packet after the follower's position arrives over LoRa:
+ * The connected board is the leader. TX notifies:
  *
- *   'G', fix (0 or 1), int32 latitude * 1e7, int32 longitude * 1e7
- *   'F', fix (0 or 1), int32 latitude * 1e7, int32 longitude * 1e7
- *   'M', uint32 centimeters, little-endian. 0xFFFFFFFF means no distance.
+ *   'G', fix, int32 latitude * 1e7, int32 longitude * 1e7
+ *   'F', follower id, fix, int32 latitude * 1e7, int32 longitude * 1e7
+ *   'M', follower id, uint32 centimeters. 0xFFFFFFFF means no distance
+ *   'X', follower id                         that follower stopped answering
+ *   'O','K' or 'O','K', id                   a follower pressed OK
  *
- * Both integers are little-endian. A fix byte of 0 means the module has
- * not locked. A later counter byte does not clear the last fix or distance.
- *
- * A 1-byte notification is that counter. A 4-byte notification is still read
- * as a little-endian uint32 so an older counter does not look like an alert.
- * Alerts stay on ALERT_UUID once that characteristic exists.
- *
- * A 9-byte version-1 notification is a follower, so the same characteristic
- * can start carrying wristbands without another app change.
+ * A 10-byte 'F' and a 5-byte 'M' are the older single-follower packets.
+ * Those use follower id 0. A later counter byte does not clear a fix.
  */
 
-/** 'G' or 'F' plus fix byte plus two int32 microdegrees. */
+/** 'G' plus fix byte plus two int32 microdegrees. */
 export const GPS_PACKET_BYTES = 10;
 
-/** 'M' plus uint32 centimeters. */
+/** 'F', id, fix, two int32 microdegrees. */
+export const FOLLOWER_FIX_BYTES = 11;
+
+/** 'M' plus uint32 centimeters, no id. */
 export const SEPARATION_PACKET_BYTES = 5;
+
+/** 'M', id, uint32 centimeters. */
+export const SEPARATION_WITH_ID_BYTES = 6;
 
 export interface GpsFix {
   fix: boolean;
@@ -42,9 +41,17 @@ export interface GpsFix {
   lon: number | null;
 }
 
+export interface FollowerGpsFix extends GpsFix {
+  id: number;
+}
+
 export interface Separation {
   known: boolean;
   meters: number | null;
+}
+
+export interface FollowerSeparation extends Separation {
+  id: number;
 }
 
 export interface LiveNotify {
@@ -56,9 +63,13 @@ export interface LiveNotify {
   /** Leader NEO-6M position, when this notify is a GPS packet. */
   gps: GpsFix | null;
   /** Follower NEO-6M position, when this notify is an F packet. */
-  followerGps: GpsFix | null;
-  /** Meters between the two GPS fixes, when this notify is a distance packet. */
-  separation: Separation | null;
+  followerGps: FollowerGpsFix | null;
+  /** Meters between the leader and that follower. */
+  separation: FollowerSeparation | null;
+  /** Board id from a 3-byte OK notify. Null when this notify is not that. */
+  okId: number | null;
+  /** Set when the leader drops a follower that stopped answering. */
+  followerGoneId: number | null;
 }
 
 export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
@@ -72,6 +83,8 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
     gps: null,
     followerGps: null,
     separation: null,
+    okId: null,
+    followerGoneId: null,
   };
 
   if (bytes.length === 1) {
@@ -90,16 +103,32 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
     }
   }
 
+  if (bytes.length === 3 && bytes[0] === 0x4f && bytes[1] === 0x4b) {
+    return { ...base, text: "OK", okId: bytes[2] };
+  }
+
+  if (bytes.length === 2 && bytes[0] === 0x58) {
+    return { ...base, followerGoneId: bytes[1] };
+  }
+
   if (bytes.length === GPS_PACKET_BYTES && bytes[0] === 0x47) {
-    return { ...base, gps: decodeLatLon(bytes) };
+    return { ...base, gps: decodeLatLon(bytes, 1) };
+  }
+
+  if (bytes.length === FOLLOWER_FIX_BYTES && bytes[0] === 0x46) {
+    return { ...base, followerGps: { id: bytes[1], ...decodeLatLon(bytes, 2) } };
   }
 
   if (bytes.length === GPS_PACKET_BYTES && bytes[0] === 0x46) {
-    return { ...base, followerGps: decodeLatLon(bytes) };
+    return { ...base, followerGps: { id: 0, ...decodeLatLon(bytes, 1) } };
+  }
+
+  if (bytes.length === SEPARATION_WITH_ID_BYTES && bytes[0] === 0x4d) {
+    return { ...base, separation: { id: bytes[1], ...decodeSeparation(bytes, 2) } };
   }
 
   if (bytes.length === SEPARATION_PACKET_BYTES && bytes[0] === 0x4d) {
-    return { ...base, separation: decodeSeparation(bytes) };
+    return { ...base, separation: { id: 0, ...decodeSeparation(bytes, 1) } };
   }
 
   if (bytes.length === LEADER_PACKET_BYTES && bytes[0] === PACKET_VERSION) {
@@ -137,6 +166,8 @@ export function eventsFromNotify(bytes: Uint8Array): BleEvent[] {
     gps: sample.gps,
     followerGps: sample.followerGps,
     separation: sample.separation,
+    okId: sample.okId,
+    followerGoneId: sample.followerGoneId,
   });
   return events;
 }
@@ -145,19 +176,19 @@ export function bytesToHex(bytes: Uint8Array): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join(" ");
 }
 
-function decodeSeparation(bytes: Uint8Array): Separation {
+function decodeSeparation(bytes: Uint8Array, cmIndex: number): Separation {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const cm = view.getUint32(1, true);
+  const cm = view.getUint32(cmIndex, true);
   if (cm === 0xffffffff) return { known: false, meters: null };
   return { known: true, meters: cm / 100 };
 }
 
-function decodeLatLon(bytes: Uint8Array): GpsFix {
-  const locked = bytes[1] === 1;
+function decodeLatLon(bytes: Uint8Array, fixIndex: number): GpsFix {
+  const locked = bytes[fixIndex] === 1;
   if (!locked) return { fix: false, lat: null, lon: null };
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const lat = view.getInt32(2, true) / 1e7;
-  const lon = view.getInt32(6, true) / 1e7;
+  const lat = view.getInt32(fixIndex + 1, true) / 1e7;
+  const lon = view.getInt32(fixIndex + 5, true) / 1e7;
   if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
     return { fix: false, lat: null, lon: null };
   }

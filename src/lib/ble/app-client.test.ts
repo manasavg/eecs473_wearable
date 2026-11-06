@@ -204,6 +204,53 @@ describe("ExcursionAppClient", () => {
     await client.disconnect();
   });
 
+  it("tracks two followers and clears the one that stops answering", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ thresholdMeters: 40 });
+    await client.connectDevice("beacon", transport);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "46",
+      followerGps: { id: 0xa3, fix: true, lat: 42.2, lon: -83.1 },
+    });
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "4d",
+      separation: { id: 0xa3, known: true, meters: 10 },
+    });
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "46",
+      followerGps: { id: 0x1f, fix: true, lat: 42.9, lon: -83.8 },
+    });
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "4d",
+      separation: { id: 0x1f, known: true, meters: 55 },
+    });
+    const followers = client.getState().followers;
+    assert.equal(followers.length, 2);
+    assert.equal(followers.find((item) => item.id === 0xa3)?.outOfRange, false);
+    assert.equal(followers.find((item) => item.id === 0x1f)?.outOfRange, true);
+    assert.equal(client.getState().outOfRange, true);
+    assert.equal(followers.find((item) => item.id === 0xa3)?.separationM, 10);
+    transport.emit({ type: "live", counter: null, text: null, hex: "58 1f", followerGoneId: 0x1f });
+    assert.equal(client.getState().followers.length, 1);
+    assert.equal(client.getState().followers[0]?.id, 0xa3);
+    assert.equal(client.getState().outOfRange, false);
+    transport.emit({ type: "live", counter: null, text: "OK", hex: "4f 4b a3", okId: 0xa3 });
+    assert.equal(client.getState().groupOkId, 0xa3);
+    await client.disconnect();
+  });
+
   it("shows the ESP32 counter without inventing a wristband", async () => {
     const transport = new ScriptedTransport();
     const client = new ExcursionAppClient();
