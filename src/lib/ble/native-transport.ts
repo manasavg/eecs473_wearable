@@ -74,8 +74,8 @@ interface NativeDevice {
 interface NativeScanResult {
   device: NativeDevice;
   localName?: string;
-  /** Company id string to the hex payload, as the iOS plugin reports it. */
-  manufacturerData?: Record<string, string>;
+  /** Company id to the payload. The iOS plugin hands this over as DataView. */
+  manufacturerData?: { [key: string]: DataView };
 }
 
 /**
@@ -434,12 +434,11 @@ function boardName(result: NativeScanResult): string {
   return result.device.name || "";
 }
 
-function nameFromMarker(manufacturerData: Record<string, string> | undefined): string | null {
+function nameFromMarker(manufacturerData: { [key: string]: DataView } | undefined): string | null {
   const payload = manufacturerData?.[BOARD_COMPANY_ID];
-  if (!payload) return null;
-  const node = payload.trim().split(/\s+/)[0];
-  if (!/^[0-9a-fA-F]{2}$/.test(node)) return null;
-  return `${BLE_NAME_PREFIX}${node.toUpperCase()}`;
+  if (!payload || payload.byteLength < 1) return null;
+  const node = payload.getUint8(0).toString(16).padStart(2, "0").toUpperCase();
+  return `${BLE_NAME_PREFIX}${node}`;
 }
 
 function isBoardName(name: string): boolean {

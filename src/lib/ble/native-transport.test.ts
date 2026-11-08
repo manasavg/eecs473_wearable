@@ -167,7 +167,7 @@ describe("NativeBleTransport", () => {
       callback({ device: { deviceId: "board-b", name: "Other" }, localName: `${BLE_NAME_PREFIX}1F` });
       callback({
         device: { deviceId: "board-f1", name: "Leader_Device_LoRa" },
-        manufacturerData: { "65535": "f1 " },
+        manufacturerData: { "65535": new DataView(Uint8Array.of(0xf1).buffer) },
       });
     };
     central.stopLEScan = async () => {
