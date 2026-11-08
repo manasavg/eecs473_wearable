@@ -126,5 +126,19 @@ text = text.replaceAll(
   "let resolvedName = advertisedName ?? peripheral.name",
 );
 
+// A board the phone already tried to connect stays "connected" in iOS after the
+// Heltec has gone back to advertising. Scan was throwing those away, so a
+// board that is on and advertising never appeared in Find devices.
+const hideConnected = `        guard peripheral.state != CBPeripheralState.connected else {
+            log("found connected device", peripheral.name ?? "Unknown")
+            // make sure we do not touch connected devices
+            return
+        }
+
+`;
+if (text.includes(hideConnected)) {
+  text = text.replace(hideConnected, "");
+}
+
 writeFileSync(file, newline === "\r\n" ? text.replaceAll("\n", "\r\n") : text);
 console.log("Updated the iOS Bluetooth plugin so it can find Leader_Device_LoRa.");

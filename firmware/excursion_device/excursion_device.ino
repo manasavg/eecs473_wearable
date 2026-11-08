@@ -77,6 +77,7 @@ uint16_t rangeLimitM = 0;
 unsigned long lastBleNotifyMs = 0;
 unsigned long lastPhoneMs = 0;
 unsigned long lastAliveMs = 0;
+unsigned long lastAdvRefreshMs = 0;
 unsigned long nextPollMs = 0;
 unsigned long lastFindMs = 0;
 uint8_t pollSlot = 0;
@@ -754,10 +755,13 @@ void setup() {
   advPacket.setManufacturerData(String(marker, 3));
   BLEAdvertisementData scanPacket;
   scanPacket.setName(bleName);
+  advertising->setScanResponse(true);
   advertising->setAdvertisementData(advPacket);
   advertising->setScanResponseData(scanPacket);
   advertising->start();
-  Serial.println("Advertising. Waiting for the phone to choose this board.");
+  lastAdvRefreshMs = millis();
+  Serial.print("Advertising ");
+  Serial.println(bleName);
 
   pinMode(OLED_RST, OUTPUT);
   digitalWrite(OLED_RST, LOW);
@@ -897,6 +901,13 @@ void loop() {
 
   pollBleNotify();
   pollGpsUart();
+  if (!deviceConnected && millis() - lastAdvRefreshMs >= 8000) {
+    lastAdvRefreshMs = millis();
+    BLEAdvertising *adv = pServer->getAdvertising();
+    adv->stop();
+    adv->start();
+  }
+
   if (millis() - lastAliveMs >= 3000) {
     lastAliveMs = millis();
     Serial.print("ALIVE ");
