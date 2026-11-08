@@ -76,6 +76,7 @@ const unsigned long FOLLOWER_POS_TTL_MS = 15000;
 uint16_t rangeLimitM = 0;
 unsigned long lastBleNotifyMs = 0;
 unsigned long lastPhoneMs = 0;
+unsigned long lastAliveMs = 0;
 unsigned long nextPollMs = 0;
 unsigned long lastFindMs = 0;
 uint8_t pollSlot = 0;
@@ -698,27 +699,20 @@ void applyRole() {
 }
 
 void setup() {
+  // USB first. The screen init used to run before this, so a stuck display
+  // produced a blank monitor and no Bluetooth name.
+  Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
+  unsigned long usbWait = millis();
+  while (!Serial && millis() - usbWait < 2000) delay(10);
+  Serial.println("BOOT");
+
   pinMode(VEXT_CTRL, OUTPUT);
   digitalWrite(VEXT_CTRL, LOW);
   delay(100);
 
   pinMode(RX_LED_PIN, OUTPUT);
   digitalWrite(RX_LED_PIN, LOW);
-
-  pinMode(OLED_RST, OUTPUT);
-  digitalWrite(OLED_RST, LOW);
-  delay(20);
-  digitalWrite(OLED_RST, HIGH);
-  delay(20);
-
-  u8x8.begin();
-  u8x8.setPowerSave(0);
-  u8x8.setFlipMode(1);
-  u8x8.setFont(u8x8_font_chroma48medium8_r);
-
-  Serial.begin(115200);
-  Serial.setTxTimeoutMs(0);
-  delay(300);
 
   uint8_t mac[6] = {0, 0, 0, 0, 0, 0};
   esp_read_mac(mac, ESP_MAC_BT);
@@ -752,6 +746,17 @@ void setup() {
   pServer->getAdvertising()->start();
   Serial.println("Advertising. Waiting for the phone to choose this board.");
 
+  pinMode(OLED_RST, OUTPUT);
+  digitalWrite(OLED_RST, LOW);
+  delay(20);
+  digitalWrite(OLED_RST, HIGH);
+  delay(20);
+  Serial.println("SCREEN");
+  u8x8.begin();
+  u8x8.setPowerSave(0);
+  u8x8.setFlipMode(1);
+  u8x8.setFont(u8x8_font_chroma48medium8_r);
+
   pinMode(FEM_POWER, OUTPUT);
   digitalWrite(FEM_POWER, HIGH);
   delay(10);
@@ -770,7 +775,11 @@ void setup() {
   } else {
     Serial.print("SX1262 Init Failed, Code: ");
     Serial.println(state);
-    while (true);
+    while (true) {
+      delay(1000);
+      Serial.println(bleName);
+      yield();
+    }
   }
   radio.setDio2AsRfSwitch(true);
   radio.startReceive();
@@ -875,5 +884,11 @@ void loop() {
 
   pollBleNotify();
   pollGpsUart();
+  if (millis() - lastAliveMs >= 3000) {
+    lastAliveMs = millis();
+    Serial.print("ALIVE ");
+    Serial.print(bleName);
+    Serial.println(isLeader ? " LEADER" : " FOLLOWER");
+  }
   yield();
 }
