@@ -743,7 +743,20 @@ void setup() {
   memset(bleRoom, 0, sizeof(bleRoom));
   pTxCharacteristic->setValue(bleRoom, sizeof(bleRoom));
   pService->start();
-  pServer->getAdvertising()->start();
+  // iOS remembers the previous name and hides a board it has not connected to
+  // yet when that name is missing from the first packet. Keep the name in the
+  // advertising packet itself. 0xFFFF plus the node id is the backup marker.
+  BLEAdvertising *advertising = pServer->getAdvertising();
+  BLEAdvertisementData advPacket;
+  advPacket.setFlags(0x06);
+  advPacket.setName(bleName);
+  char marker[3] = {(char)0xFF, (char)0xFF, (char)nodeId};
+  advPacket.setManufacturerData(String(marker, 3));
+  BLEAdvertisementData scanPacket;
+  scanPacket.setName(bleName);
+  advertising->setAdvertisementData(advPacket);
+  advertising->setScanResponseData(scanPacket);
+  advertising->start();
   Serial.println("Advertising. Waiting for the phone to choose this board.");
 
   pinMode(OLED_RST, OUTPUT);

@@ -165,6 +165,10 @@ describe("NativeBleTransport", () => {
       callback({ device: { deviceId: "board-a" }, localName: `${BLE_NAME_PREFIX}A3` });
       callback({ device: { deviceId: "unnamed" } });
       callback({ device: { deviceId: "board-b", name: "Other" }, localName: `${BLE_NAME_PREFIX}1F` });
+      callback({
+        device: { deviceId: "board-f1", name: "Leader_Device_LoRa" },
+        manufacturerData: { "65535": "f1 " },
+      });
     };
     central.stopLEScan = async () => {
       stopped = true;
@@ -172,7 +176,12 @@ describe("NativeBleTransport", () => {
     const link = new NativeBleTransport(central);
     const names: string[] = [];
     await link.scan((peer) => names.push(peer.name));
-    assert.deepEqual(names, [`${BLE_NAME_PREFIX}A3`, `${BLE_NAME_PREFIX}A3`, `${BLE_NAME_PREFIX}1F`]);
+    assert.deepEqual(names, [
+      `${BLE_NAME_PREFIX}A3`,
+      `${BLE_NAME_PREFIX}A3`,
+      `${BLE_NAME_PREFIX}1F`,
+      `${BLE_NAME_PREFIX}F1`,
+    ]);
     await link.connect(false, { deviceId: "board-b", name: `${BLE_NAME_PREFIX}1F` });
     assert.equal(central.requestCount, 0);
     assert.equal(central.connectedId, "board-b");

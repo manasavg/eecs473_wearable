@@ -31,6 +31,8 @@ const RECONNECT_ATTEMPTS = 3;
 const DEVICE_ID_KEY = "excursion.nativeDeviceId";
 const DEVICE_NAME_KEY = "excursion.nativeDeviceName";
 const LEGACY_NAME = "Leader_Device_LoRa";
+/** Test company id 0xFFFF. The sketch appends the node id after it. */
+const BOARD_COMPANY_ID = "65535";
 
 /**
  * initialize() builds a new iOS Bluetooth controller. Calling it again after a
@@ -72,6 +74,8 @@ interface NativeDevice {
 interface NativeScanResult {
   device: NativeDevice;
   localName?: string;
+  /** Company id string to the hex payload, as the iOS plugin reports it. */
+  manufacturerData?: Record<string, string>;
 }
 
 /**
@@ -423,7 +427,19 @@ async function prepareCentral(central: NativeCentral): Promise<void> {
 function boardName(result: NativeScanResult): string {
   // The advertisement is the name the board is sending now. peripheral.name
   // can still be Leader_Device_LoRa from the last time this phone connected.
-  return result.localName || result.device.name || "";
+  const advertised = result.localName || "";
+  if (isBoardName(advertised)) return advertised;
+  const marked = nameFromMarker(result.manufacturerData);
+  if (marked) return marked;
+  return result.device.name || "";
+}
+
+function nameFromMarker(manufacturerData: Record<string, string> | undefined): string | null {
+  const payload = manufacturerData?.[BOARD_COMPANY_ID];
+  if (!payload) return null;
+  const node = payload.trim().split(/\s+/)[0];
+  if (!/^[0-9a-fA-F]{2}$/.test(node)) return null;
+  return `${BLE_NAME_PREFIX}${node.toUpperCase()}`;
 }
 
 function isBoardName(name: string): boolean {
