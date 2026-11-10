@@ -8,7 +8,6 @@ import { webBluetoothAvailable } from "@/lib/ble/web-bluetooth-transport";
 import { bearingDegrees, cardinalLabel, guideCue, relativeBearing } from "@/lib/geo";
 import { boardLabel, formatGpsDegrees, formatSeparation } from "@/lib/format";
 import { ensureNotifyPermission, notifyOutOfRange } from "@/lib/notify";
-import { BLE_NAME_PREFIX } from "@/lib/ble/uuids";
 import { useCompass } from "./use-compass";
 import { useExcursion } from "./use-excursion";
 
@@ -62,8 +61,8 @@ export function ExcursionApp() {
       {!onLink ? (
         <div className="mt-6 flex flex-col gap-4">
           <p className="text-sm text-neutral-600">
-            Three boards, one sketch. Pick any {BLE_NAME_PREFIX} board. That one becomes the leader.
-            The other two are followers until you disconnect and pick a different board.
+            Three Meshtastic boards. Pick any one. That board is the leader, and it reports the other two.
+            Disconnect and pick a different board to swap.
           </p>
           {(state.error || app.scanError) && (
             <p className="text-sm text-red-700" role="alert">
@@ -84,7 +83,7 @@ export function ExcursionApp() {
                 {app.scanning ? "Looking" : "Find devices"}
               </button>
               {app.scanning && app.peers.length === 0 && (
-                <p className="text-sm text-neutral-600">Looking for Excursion boards…</p>
+                <p className="text-sm text-neutral-600">Looking for Meshtastic boards…</p>
               )}
               {app.peers.length > 0 && (
                 <ul className="flex flex-col gap-2">
@@ -107,7 +106,7 @@ export function ExcursionApp() {
               )}
               {looked && !app.scanning && app.peers.length === 0 && !app.scanError && (
                 <p className="text-sm text-neutral-600">
-                  No Excursion boards in range. Power all three on, then look again.
+                  No Meshtastic boards in range. Power all three on, then look again.
                 </p>
               )}
             </>
@@ -175,7 +174,7 @@ export function ExcursionApp() {
           )}
 
           <section>
-            <h2 className="text-sm font-medium">LoRa</h2>
+            <h2 className="text-sm font-medium">Check-in</h2>
             <p className="mt-2 text-2xl">{checkInLabel}</p>
             <button
               type="button"
@@ -186,7 +185,7 @@ export function ExcursionApp() {
               Check in
             </button>
             <p className="mt-2 text-sm text-neutral-600">
-              Writes the leader radio. A follower sends OK back over LoRa, then this line names that board.
+              Sends CHECK IN on the Meshtastic channel. An OK text from another board names that board.
             </p>
             {state.liveLink?.counter != null && (
               <p className="mt-2 text-sm text-neutral-500">Link counter {state.liveLink.counter}</p>

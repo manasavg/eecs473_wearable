@@ -1,13 +1,11 @@
-import { eventsFromNotify } from "./live-link";
-import { decodeAlert, decodeFollower, decodeLeader, encodeCommand, viewToBytes } from "./protocol";
+import { MeshSession } from "../meshtastic/session";
+import { viewToBytes } from "./protocol";
 import type { BleEvent, BleTransport } from "./transport";
 import type { AppCommand } from "./types";
-import { Status } from "./types";
+import { CmdType, Status } from "./types";
 import {
-  ALERT_UUID,
-  FOLLOWER_STATUS_UUID,
-  LEADER_STATUS_UUID,
   BLE_NAME_PREFIX,
+  FROM_RADIO_UUID,
   LIVE_RX_UUID,
   LIVE_SERVICE_UUID,
   LIVE_TX_UUID,
@@ -37,6 +35,9 @@ export class WebBluetoothTransport implements BleTransport {
   private listeners = new Set<(event: BleEvent) => void>();
   private device: BluetoothDevice | null = null;
   private command: BluetoothRemoteGATTCharacteristic | null = null;
+  private fromRadio: BluetoothRemoteGATTCharacteristic | null = null;
+  private mesh = new MeshSession();
+  private draining = false;
   private wantLink = false;
   private reconnectsLeft = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -77,9 +78,8 @@ export class WebBluetoothTransport implements BleTransport {
     } else {
       try {
         device = await navigator.bluetooth.requestDevice({
-          // The sketch advertises the name only. It does not call addServiceUUID,
-          // so a service filter by itself would hide Leader_Device_LoRa.
           filters: [
+            { services: [LIVE_SERVICE_UUID] },
             { namePrefix: BLE_NAME_PREFIX },
             ...(prefix === BLE_NAME_PREFIX ? [] : [{ namePrefix: prefix }]),
           ],
@@ -112,28 +112,22 @@ export class WebBluetoothTransport implements BleTransport {
   }
 
   async writeCommand(command: AppCommand): Promise<void> {
+    if (command.type !== CmdType.CHECK_IN) return;
     const characteristic = this.command;
     if (!characteristic) {
       throw new Error("The beacon is not ready for commands yet.");
     }
-    const payload = encodeCommand(command);
-    // Web Bluetooth's BufferSource type is narrower than Uint8Array's generic.
-    const wire = payload as BufferSource;
-
-    // TODO(ble): Write-without-response keeps a check-in off the ranging window.
-    // Enable that property on the ESP32 command characteristic. If it is missing,
-    // we fall back to a write with response.
-    if (characteristic.properties.writeWithoutResponse) {
-      await characteristic.writeValueWithoutResponse(wire);
-      return;
-    }
+    const payload = this.mesh.textPacket("CHECK IN");
+    const wire = new Uint8Array(payload) as BufferSource;
     if (characteristic.properties.write) {
       await characteristic.writeValueWithResponse(wire);
       return;
     }
-    throw new Error(
-      "The command characteristic is not writable. Check the ESP32 GATT permissions.",
-    );
+    if (characteristic.properties.writeWithoutResponse) {
+      await characteristic.writeValueWithoutResponse(wire);
+      return;
+    }
+    throw new Error("ToRadio is not writable.");
   }
 
   private attach(device: BluetoothDevice): void {
@@ -146,6 +140,7 @@ export class WebBluetoothTransport implements BleTransport {
     this.device?.removeEventListener("gattserverdisconnected", this.onGattDisconnected);
     this.device = null;
     this.command = null;
+    this.fromRadio = null;
   }
 
   private async openGatt(device: BluetoothDevice): Promise<void> {
@@ -161,56 +156,46 @@ export class WebBluetoothTransport implements BleTransport {
         );
       });
 
-      const tx = await characteristic(service, LIVE_TX_UUID, "notify");
-      const rx = await characteristic(service, LIVE_RX_UUID, "write");
-      this.command = rx;
+      const fromNum = await characteristic(service, LIVE_TX_UUID, "FromNum");
+      const toRadio = await characteristic(service, LIVE_RX_UUID, "ToRadio");
+      this.fromRadio = await characteristic(service, FROM_RADIO_UUID, "FromRadio");
+      this.command = toRadio;
+      this.mesh = new MeshSession();
 
-      // TODO(ble): Pairing is done by the phone OS, not by this file.
-      // The current sketch does not require a bond. Before a hike, require
-      // LE Secure Connections so a nearby phone cannot write this characteristic.
-
-      await this.listen(tx, (bytes) => this.emitSample(bytes));
-
-      // TODO(ble): Present only after the ESP32 adds them to LIVE_SERVICE_UUID.
-      await this.listenIfPresent(service, LEADER_STATUS_UUID, (bytes) => {
-        const status = decodeLeader(bytes);
-        this.emit({ type: "leader", batteryPercent: status.batteryPercent });
+      await this.listen(fromNum, () => {
+        void this.drain();
       });
-      await this.listenIfPresent(service, FOLLOWER_STATUS_UUID, (bytes) => {
-        this.emit({ type: "follower", info: decodeFollower(bytes) });
-      });
-      await this.listenIfPresent(service, ALERT_UUID, (bytes) => {
-        const notice = decodeAlert(bytes);
-        this.emit({
-          type: "alert",
-          deviceId: notice.deviceId,
-          status: notice.status,
-          uwbOutOfRange: notice.uwbOutOfRange,
-        });
-      });
-
       this.reconnectsLeft = RECONNECT_ATTEMPTS;
       this.emit({
         type: "connected",
-        deviceName: device.name || "Leader beacon",
+        deviceName: device.name || BLE_NAME_PREFIX,
       });
+      const hello = this.mesh.wantConfig();
+      await toRadio.writeValueWithResponse(new Uint8Array(hello) as BufferSource);
+      await this.drain();
     } finally {
       this.opening = false;
     }
   }
 
-  private emitSample(bytes: Uint8Array): void {
-    for (const event of eventsFromNotify(bytes)) this.emit(event);
-  }
-
-  private async listenIfPresent(
-    service: BluetoothRemoteGATTService,
-    uuid: string,
-    onPacket: (bytes: Uint8Array) => void,
-  ): Promise<void> {
-    const found = await optionalCharacteristic(service, uuid);
-    if (!found) return;
-    await this.listen(found, onPacket);
+  private async drain(): Promise<void> {
+    const fromRadio = this.fromRadio;
+    if (!fromRadio || this.draining) return;
+    this.draining = true;
+    try {
+      for (let n = 0; n < 40; n++) {
+        let bytes: Uint8Array;
+        try {
+          bytes = viewToBytes(await fromRadio.readValue());
+        } catch {
+          break;
+        }
+        if (bytes.length === 0) break;
+        for (const event of this.mesh.ingest(bytes)) this.emit(event);
+      }
+    } finally {
+      this.draining = false;
+    }
   }
 
   private async listen(
@@ -291,20 +276,9 @@ async function characteristic(
   }
 }
 
-async function optionalCharacteristic(
-  service: BluetoothRemoteGATTService,
-  uuid: string,
-): Promise<BluetoothRemoteGATTCharacteristic | null> {
-  try {
-    return await service.getCharacteristic(uuid);
-  } catch {
-    return null;
-  }
-}
-
 function explainRequestError(error: unknown, prefix: string): string {
   if (error instanceof DOMException && error.name === "NotFoundError") {
-    return `No beacon chosen. If the list was empty, the ESP32 is not advertising as “${prefix}”. The sketch uses ${BLE_NAME_PREFIX}.`;
+    return `No board chosen. If the list was empty, the Heltec is not advertising as “${prefix}”.`;
   }
   if (error instanceof Error && error.message) return error.message;
   return "Could not open the Bluetooth chooser.";
