@@ -17,7 +17,7 @@ npm run dev
 
 Open http://127.0.0.1:4317.
 
-On the iPhone project: `git pull`, then `npm install`, then `npm run cap:sync`, then Run in Xcode. In the app, tap Find devices and choose the board that should be the leader.
+On the iPhone project: `git pull`, then `npm install`, then `npm run cap:sync`, then Run in Xcode. If that build prints nothing, run `conda deactivate` and try `npm run cap:sync` again. In the app, tap Find devices and choose the board that should be the leader.
 
 ## Firmware
 
