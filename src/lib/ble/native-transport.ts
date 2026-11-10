@@ -234,7 +234,9 @@ export class NativeBleTransport implements BleTransport {
     if (!central || !deviceId || !this.writeTarget) {
       throw new Error("The beacon is not ready for commands yet.");
     }
-    await this.writeMesh(central, deviceId, this.mesh.textPacket("CHECK IN"));
+    for (const packet of this.mesh.checkInPackets()) {
+      await this.writeMesh(central, deviceId, packet);
+    }
   }
 
   private async pickDevice(central: NativeCentral): Promise<NativeDevice> {

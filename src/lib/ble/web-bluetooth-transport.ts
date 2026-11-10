@@ -117,17 +117,18 @@ export class WebBluetoothTransport implements BleTransport {
     if (!characteristic) {
       throw new Error("The beacon is not ready for commands yet.");
     }
-    const payload = this.mesh.textPacket("CHECK IN");
-    const wire = new Uint8Array(payload) as BufferSource;
-    if (characteristic.properties.write) {
-      await characteristic.writeValueWithResponse(wire);
-      return;
+    for (const packet of this.mesh.checkInPackets()) {
+      const wire = new Uint8Array(packet) as BufferSource;
+      if (characteristic.properties.write) {
+        await characteristic.writeValueWithResponse(wire);
+        continue;
+      }
+      if (characteristic.properties.writeWithoutResponse) {
+        await characteristic.writeValueWithoutResponse(wire);
+        continue;
+      }
+      throw new Error("ToRadio is not writable.");
     }
-    if (characteristic.properties.writeWithoutResponse) {
-      await characteristic.writeValueWithoutResponse(wire);
-      return;
-    }
-    throw new Error("ToRadio is not writable.");
   }
 
   private attach(device: BluetoothDevice): void {

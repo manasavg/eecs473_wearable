@@ -4,14 +4,19 @@ import { haversineMeters } from "../geo";
 import type { BleEvent } from "../ble/transport";
 
 const BROADCAST = 0xffffffff;
-/** A node that has not been heard for this long drops off the follower list. */
-const QUIET_MS = 10 * 60 * 1000;
+/** Node numbers 0–3 are reserved by Meshtastic. */
+const FIRST_NODE = 4;
+/** A real clock reading. Anything earlier is an unset radio clock. */
+const REAL_TIME_SEC = 1_600_000_000;
+/** Drop a node the radio has not heard for this long, when its clock is valid. */
+const QUIET_MS = 6 * 60 * 60 * 1000;
 
 interface Fix {
   fix: boolean;
   lat: number | null;
   lon: number | null;
   heardMs: number;
+  name: string;
 }
 
 /**
@@ -21,8 +26,10 @@ interface Fix {
  */
 export class MeshSession {
   private myNode = 0;
-  private self: Fix = { fix: false, lat: null, lon: null, heardMs: 0 };
+  private self: Fix = { fix: false, lat: null, lon: null, heardMs: 0, name: "" };
   private followers = new Map<number, Fix>();
+  /** Packet id to the follower it was sent to. A routing ack for that id means OK. */
+  private pendingAcks = new Map<number, number>();
 
   wantConfig(id = 1): Uint8Array {
     return toBinary(
@@ -33,14 +40,29 @@ export class MeshSession {
     );
   }
 
-  /** A channel text. The dashboard sends CHECK IN this way. */
-  textPacket(text: string): Uint8Array {
+  /**
+   * One CHECK IN for each other board, asking that board to acknowledge it.
+   * A broadcast is used only when this radio has not heard the others yet.
+   */
+  checkInPackets(): Uint8Array[] {
+    const targets = [...this.followers.keys()];
+    const destinations = targets.length > 0 ? targets : [BROADCAST];
+    return destinations.map((to) => this.textPacket("CHECK IN", to, to !== BROADCAST));
+  }
+
+  /** A channel or direct text. Direct messages request an acknowledgement. */
+  textPacket(text: string, to = BROADCAST, wantAck = false): Uint8Array {
+    const id = packetId();
+    if (wantAck && to !== BROADCAST) this.pendingAcks.set(id, to >>> 0);
     const packet = create(Mesh.MeshPacketSchema, {
-      to: BROADCAST,
+      from: this.myNode,
+      to,
       channel: 0,
-      id: packetId(),
+      id,
       hopLimit: 3,
-      wantAck: false,
+      hopStart: 3,
+      wantAck,
+      priority: wantAck ? Mesh.MeshPacket_Priority.RELIABLE : Mesh.MeshPacket_Priority.DEFAULT,
       payloadVariant: {
         case: "decoded",
         value: create(Mesh.DataSchema, {
@@ -69,9 +91,9 @@ export class MeshSession {
     const variant = message.payloadVariant;
     if (variant.case === "myInfo") {
       this.myNode = variant.value.myNodeNum >>> 0;
+      events.push(...this.drop(this.myNode));
     } else if (variant.case === "nodeInfo") {
-      const heard = variant.value.lastHeard > 0 ? variant.value.lastHeard * 1000 : now;
-      events.push(...this.place(variant.value.num >>> 0, variant.value.position, heard, now));
+      events.push(...this.onNode(variant.value, now));
     } else if (variant.case === "packet") {
       events.push(...this.onPacket(variant.value, now));
     }
@@ -79,10 +101,19 @@ export class MeshSession {
     return events;
   }
 
+  private onNode(info: Mesh.NodeInfo, now: number): BleEvent[] {
+    const id = info.num >>> 0;
+    if (info.viaMqtt || info.isIgnored || (info.hopsAway ?? 0) > 2) return this.drop(id);
+    if (info.lastHeard > REAL_TIME_SEC && now - info.lastHeard * 1000 > QUIET_MS) return this.drop(id);
+    const heard = info.lastHeard > REAL_TIME_SEC ? info.lastHeard * 1000 : now;
+    return this.place(id, info.position, heard, now, nodeName(info.user, id));
+  }
+
   private onPacket(packet: Mesh.MeshPacket, now: number): BleEvent[] {
-    if (packet.payloadVariant.case !== "decoded") return [];
+    if (packet.viaMqtt || packet.payloadVariant.case !== "decoded") return [];
     const data = packet.payloadVariant.value;
     const from = packet.from >>> 0;
+    if (data.portnum === Portnums.PortNum.ROUTING_APP) return this.onAck(data, from);
     if (data.portnum === Portnums.PortNum.POSITION_APP) {
       let position: Mesh.Position;
       try {
@@ -90,41 +121,58 @@ export class MeshSession {
       } catch {
         return [];
       }
-      return this.place(from, position, now, now);
+      return this.place(from, position, now, now, this.followers.get(from)?.name);
     }
     if (data.portnum !== Portnums.PortNum.TEXT_MESSAGE_APP || from === this.myNode) return [];
     const text = new TextDecoder().decode(data.payload).replace(/\0+$/, "").trim();
     if (!text) return [];
     const ok = text.toUpperCase() === "OK" || text.toUpperCase().startsWith("OK ");
-    return [
-      {
-        type: "live",
-        counter: null,
-        text,
-        hex: "",
-        okId: ok ? from : null,
-      },
-    ];
+    return [live({ text, okId: ok ? from : null })];
   }
 
-  private place(id: number, position: Mesh.Position | undefined, heardMs: number, now: number): BleEvent[] {
-    if (id === 0) return [];
+  private onAck(data: Mesh.Data, from: number): BleEvent[] {
+    const requestId = data.requestId >>> 0;
+    const dest = this.pendingAcks.get(requestId);
+    if (dest == null) return [];
+    let routing: Mesh.Routing;
+    try {
+      routing = fromBinary(Mesh.RoutingSchema, data.payload);
+    } catch {
+      return [];
+    }
+    if (routing.variant.case === "errorReason" && routing.variant.value !== Mesh.Routing_Error.NONE) {
+      this.pendingAcks.delete(requestId);
+      return [];
+    }
+    this.pendingAcks.delete(requestId);
+    const id = from >= FIRST_NODE && from !== this.myNode ? from : dest;
+    return [live({ text: "OK", okId: id })];
+  }
+
+  private place(
+    id: number,
+    position: Mesh.Position | undefined,
+    heardMs: number,
+    now: number,
+    name?: string,
+  ): BleEvent[] {
+    if (id < FIRST_NODE) return [];
     const fix = readFix(position);
     if (id === this.myNode) {
-      this.self = { ...fix, heardMs };
+      this.self = { ...fix, heardMs, name: name ?? this.self.name };
       return [
-        {
-          type: "live",
-          counter: null,
-          text: null,
-          hex: "",
-          gps: { fix: fix.fix, lat: fix.lat, lon: fix.lon },
-        },
+        live({ gps: { fix: fix.fix, lat: fix.lat, lon: fix.lon } }),
         ...this.separations(now),
       ];
     }
-    this.followers.set(id, { ...fix, heardMs });
+    const previous = this.followers.get(id);
+    this.followers.set(id, { ...fix, heardMs, name: name || previous?.name || nodeName(undefined, id) });
     return [this.followerEvent(id, this.followers.get(id)!)];
+  }
+
+  private drop(id: number): BleEvent[] {
+    if (!this.followers.delete(id)) return [];
+    return [live({ followerGoneId: id })];
   }
 
   private separations(now: number): BleEvent[] {
@@ -139,14 +187,10 @@ export class MeshSession {
   private followerEvent(id: number, follower: Fix): BleEvent {
     const known = this.self.fix && follower.fix && this.self.lat != null && this.self.lon != null && follower.lat != null && follower.lon != null;
     const meters = known ? haversineMeters(this.self.lat!, this.self.lon!, follower.lat!, follower.lon!) : null;
-    return {
-      type: "live",
-      counter: null,
-      text: null,
-      hex: "",
-      followerGps: { id, fix: follower.fix, lat: follower.lat, lon: follower.lon },
+    return live({
+      followerGps: { id, fix: follower.fix, lat: follower.lat, lon: follower.lon, name: follower.name },
       separation: { id, known, meters },
-    };
+    });
   }
 
   private expire(now: number): BleEvent[] {
@@ -154,16 +198,22 @@ export class MeshSession {
     for (const [id, follower] of this.followers) {
       if (now - follower.heardMs <= QUIET_MS) continue;
       this.followers.delete(id);
-      events.push({
-        type: "live",
-        counter: null,
-        text: null,
-        hex: "",
-        followerGoneId: id,
-      });
+      events.push(live({ followerGoneId: id }));
     }
     return events;
   }
+}
+
+function live(partial: Partial<Extract<BleEvent, { type: "live" }>>): BleEvent {
+  return { type: "live", counter: null, text: null, hex: "", ...partial };
+}
+
+function nodeName(user: Mesh.User | undefined, id: number): string {
+  const longName = user?.longName?.trim();
+  const shortName = user?.shortName?.trim();
+  if (longName) return longName;
+  if (shortName) return shortName;
+  return `Meshtastic ${(id >>> 0).toString(16).slice(-4).toUpperCase()}`;
 }
 
 function readFix(position: Mesh.Position | undefined): { fix: boolean; lat: number | null; lon: number | null } {

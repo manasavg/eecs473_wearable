@@ -72,6 +72,8 @@ export interface ActivityEntry {
 /** One of the other boards, tracked by the leader the phone is connected to. */
 export interface TrackedFollower {
   id: number;
+  /** Meshtastic long name, when the radio has one. */
+  name: string | null;
   fix: boolean | null;
   lat: number | null;
   lon: number | null;
@@ -106,6 +108,8 @@ export interface AppState {
   groupOkAt: number | null;
   /** Board id from that OK, when the radio included one. */
   groupOkId: number | null;
+  /** Every follower that acknowledged this check-in. */
+  okIds: number[];
   /** Null until the first GPS packet. False when the NEO-6M has not locked. */
   gpsFix: boolean | null;
   gpsLat: number | null;
@@ -138,6 +142,7 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
     groupCheckInAt: null,
     groupOkAt: null,
     groupOkId: null,
+    okIds: [],
     gpsFix: null,
     gpsLat: null,
     gpsLon: null,
@@ -172,8 +177,9 @@ function upsertTracked(
   thresholdMeters: number,
 ): TrackedFollower[] {
   const previous = followers.find((follower) => follower.id === id);
-  const next: TrackedFollower = {
+    const next: TrackedFollower = {
     id,
+    name: patch.name !== undefined ? patch.name : (previous?.name ?? null),
     fix: patch.fix !== undefined ? patch.fix : (previous?.fix ?? null),
     lat: patch.lat !== undefined ? patch.lat : (previous?.lat ?? null),
     lon: patch.lon !== undefined ? patch.lon : (previous?.lon ?? null),
@@ -365,7 +371,7 @@ export class ExcursionAppClient {
     }
     const now = Date.now();
     this.commit(
-      { ...this.state, groupCheckInAt: now, groupOkAt: null, groupOkId: null, error: null },
+      { ...this.state, groupCheckInAt: now, groupOkAt: null, groupOkId: null, okIds: [], error: null },
       { id: nextId(), at: now, kind: "checkin" },
     );
   }
@@ -441,6 +447,7 @@ export class ExcursionAppClient {
               fix: event.followerGps.fix,
               lat: event.followerGps.lat,
               lon: event.followerGps.lon,
+              ...(event.followerGps.name ? { name: event.followerGps.name } : {}),
             },
             this.state.thresholdMeters,
           );
@@ -462,7 +469,11 @@ export class ExcursionAppClient {
               ...this.state,
               lastPacketAt: now,
               groupOkAt: followerOk ? now : this.state.groupOkAt,
-              groupOkId: followerOk ? (event.okId ?? null) : this.state.groupOkId,
+              groupOkId: followerOk ? (event.okId ?? this.state.groupOkId) : this.state.groupOkId,
+              okIds:
+                followerOk && event.okId != null
+                  ? [...new Set([...this.state.okIds, event.okId])]
+                  : this.state.okIds,
               gpsFix: gps ? gps.fix : this.state.gpsFix,
               gpsLat: gps ? gps.lat : this.state.gpsLat,
               gpsLon: gps ? gps.lon : this.state.gpsLon,
