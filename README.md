@@ -17,7 +17,7 @@ npm run dev
 
 Open http://127.0.0.1:4317.
 
-On the iPhone project: `git pull`, then `npm run cap:sync`, then Run in Xcode. That copies the already built `out/` folder into the Xcode project. It does not compile. In the app, tap Find devices and choose the board that should be the leader.
+On the iPhone project: `git pull`, then `npm run cap:sync`, then Run in Xcode. That copies the already built app into the Xcode project. It does not compile, and it does not run `xcodebuild`. In the app, tap Find devices and choose the board that should be the leader.
 
 ## Firmware
 
