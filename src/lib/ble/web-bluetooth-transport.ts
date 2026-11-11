@@ -1,4 +1,4 @@
-import { MeshSession } from "../meshtastic/session";
+import { MeshLink } from "../meshtastic/link";
 import { viewToBytes } from "./protocol";
 import type { BleEvent, BleTransport } from "./transport";
 import type { AppCommand } from "./types";
@@ -36,7 +36,7 @@ export class WebBluetoothTransport implements BleTransport {
   private device: BluetoothDevice | null = null;
   private command: BluetoothRemoteGATTCharacteristic | null = null;
   private fromRadio: BluetoothRemoteGATTCharacteristic | null = null;
-  private mesh = new MeshSession();
+  private link: MeshLink | null = null;
   private draining = false;
   private wantLink = false;
   private reconnectsLeft = 0;
@@ -117,18 +117,8 @@ export class WebBluetoothTransport implements BleTransport {
     if (!characteristic) {
       throw new Error("The beacon is not ready for commands yet.");
     }
-    for (const packet of this.mesh.checkInPackets()) {
-      const wire = new Uint8Array(packet) as BufferSource;
-      if (characteristic.properties.write) {
-        await characteristic.writeValueWithResponse(wire);
-        continue;
-      }
-      if (characteristic.properties.writeWithoutResponse) {
-        await characteristic.writeValueWithoutResponse(wire);
-        continue;
-      }
-      throw new Error("ToRadio is not writable.");
-    }
+    if (!this.link) throw new Error("The beacon is not ready for commands yet.");
+    await this.link.sendCheckIn();
   }
 
   private attach(device: BluetoothDevice): void {
@@ -161,7 +151,21 @@ export class WebBluetoothTransport implements BleTransport {
       const toRadio = await characteristic(service, LIVE_RX_UUID, "ToRadio");
       this.fromRadio = await characteristic(service, FROM_RADIO_UUID, "FromRadio");
       this.command = toRadio;
-      this.mesh = new MeshSession();
+      this.link = new MeshLink(
+        async (bytes) => {
+          const wire = new Uint8Array(bytes) as BufferSource;
+          if (toRadio.properties.write) {
+            await toRadio.writeValueWithResponse(wire);
+            return;
+          }
+          if (toRadio.properties.writeWithoutResponse) {
+            await toRadio.writeValueWithoutResponse(wire);
+            return;
+          }
+          throw new Error("ToRadio is not writable.");
+        },
+        (event) => this.emit(event),
+      );
 
       await this.listen(fromNum, () => {
         void this.drain();
@@ -171,8 +175,7 @@ export class WebBluetoothTransport implements BleTransport {
         type: "connected",
         deviceName: device.name || BLE_NAME_PREFIX,
       });
-      const hello = this.mesh.wantConfig();
-      await toRadio.writeValueWithResponse(new Uint8Array(hello) as BufferSource);
+      await this.link.configure();
       await this.drain();
     } finally {
       this.opening = false;
@@ -192,7 +195,7 @@ export class WebBluetoothTransport implements BleTransport {
           break;
         }
         if (bytes.length === 0) break;
-        for (const event of this.mesh.ingest(bytes)) this.emit(event);
+        this.link?.push(bytes);
       }
     } finally {
       this.draining = false;

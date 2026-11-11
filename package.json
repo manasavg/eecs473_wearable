@@ -10,13 +10,14 @@
     "build:ios": "node scripts/ios-build.mjs",
     "postinstall": "node scripts/patch-ble-ios.mjs",
     "cap:sync": "node scripts/patch-ble-ios.mjs && node scripts/cap-copy.mjs",
-    "test": "node --import tsx --test src/lib/geo.test.ts src/lib/ble/protocol.test.ts src/lib/ble/live-link.test.ts src/lib/ble/app-client.test.ts src/lib/ble/native-transport.test.ts src/lib/meshtastic/session.test.ts"
+    "test": "node --import tsx --test src/lib/geo.test.ts src/lib/ble/protocol.test.ts src/lib/ble/live-link.test.ts src/lib/ble/app-client.test.ts src/lib/ble/native-transport.test.ts src/lib/meshtastic/link.test.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.17.0",
     "@capacitor-community/bluetooth-le": "8.3.0",
     "@capacitor/core": "^8.5.2",
     "@capacitor/local-notifications": "^8.3.1",
+    "@meshtastic/core": "^2.6.7",
     "@meshtastic/protobufs": "^2.8.0",
     "next": "15.5.27",
     "react": "19.1.0",

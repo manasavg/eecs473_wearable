@@ -1,5 +1,5 @@
 import { Capacitor } from "@capacitor/core";
-import { MeshSession } from "../meshtastic/session";
+import { MeshLink } from "../meshtastic/link";
 import { viewToBytes } from "./protocol";
 import type { BleEvent, BlePeer, BleTransport } from "./transport";
 import type { AppCommand } from "./types";
@@ -140,7 +140,7 @@ export class NativeBleTransport implements BleTransport {
   private reconnectsLeft = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private opening = false;
-  private mesh = new MeshSession();
+  private link: MeshLink | null = null;
   private draining = false;
   private drainAgain = false;
 
@@ -234,9 +234,8 @@ export class NativeBleTransport implements BleTransport {
     if (!central || !deviceId || !this.writeTarget) {
       throw new Error("The beacon is not ready for commands yet.");
     }
-    for (const packet of this.mesh.checkInPackets()) {
-      await this.writeMesh(central, deviceId, packet);
-    }
+    if (!this.link) throw new Error("The beacon is not ready for commands yet.");
+    await this.link.sendCheckIn();
   }
 
   private async pickDevice(central: NativeCentral): Promise<NativeDevice> {
@@ -334,14 +333,17 @@ export class NativeBleTransport implements BleTransport {
         throw new Error(`${BLE_NAME_PREFIX} is missing the FromRadio characteristic ${FROM_RADIO_UUID}.`);
       }
       this.writeTarget = { uuid: LIVE_RX_UUID, withoutResponse: false };
-      this.mesh = new MeshSession();
+      this.link = new MeshLink(
+        (bytes) => this.writeMesh(central, device.deviceId, bytes),
+        (event) => this.emit(event),
+      );
 
       await this.subscribeChar(central, device.deviceId, LIVE_TX_UUID);
       writeStorage(DEVICE_ID_KEY, device.deviceId);
       writeStorage(DEVICE_NAME_KEY, this.deviceName);
       this.reconnectsLeft = RECONNECT_ATTEMPTS;
       this.emit({ type: "connected", deviceName: this.deviceName });
-      await this.writeMesh(central, device.deviceId, this.mesh.wantConfig());
+      await this.link.configure();
       await this.drain(central, device.deviceId);
     } finally {
       this.opening = false;
@@ -384,7 +386,7 @@ export class NativeBleTransport implements BleTransport {
             break;
           }
           if (bytes.length === 0) break;
-          for (const event of this.mesh.ingest(bytes)) this.emit(event);
+          this.link?.push(bytes);
         }
       } while (this.drainAgain && this.wantLink);
     } finally {
