@@ -1,13 +1,12 @@
 import { Capacitor } from "@capacitor/core";
-import { eventsFromNotify } from "./live-link";
-import { encodeCommand, viewToBytes } from "./protocol";
+import { MeshLink } from "../meshtastic/link";
+import { viewToBytes } from "./protocol";
 import type { BleEvent, BlePeer, BleTransport } from "./transport";
 import type { AppCommand } from "./types";
+import { CmdType } from "./types";
 import {
-  ALERT_UUID,
-  FOLLOWER_STATUS_UUID,
-  LEADER_STATUS_UUID,
   BLE_NAME_PREFIX,
+  FROM_RADIO_UUID,
   LIVE_RX_UUID,
   LIVE_SERVICE_UUID,
   LIVE_TX_UUID,
@@ -30,9 +29,6 @@ import {
 const RECONNECT_ATTEMPTS = 3;
 const DEVICE_ID_KEY = "excursion.nativeDeviceId";
 const DEVICE_NAME_KEY = "excursion.nativeDeviceName";
-const LEGACY_NAME = "Leader_Device_LoRa";
-/** Test company id 0xFFFF. The sketch appends the node id after it. */
-const BOARD_COMPANY_ID = "65535";
 
 /**
  * initialize() builds a new iOS Bluetooth controller. Calling it again after a
@@ -74,8 +70,7 @@ interface NativeDevice {
 interface NativeScanResult {
   device: NativeDevice;
   localName?: string;
-  /** Company id to the payload. The iOS plugin hands this over as DataView. */
-  manufacturerData?: { [key: string]: DataView };
+  uuids?: string[];
 }
 
 /**
@@ -94,6 +89,7 @@ export interface NativeCentral {
   }): Promise<NativeDevice>;
   requestLEScan?(
     options: {
+      services?: string[];
       namePrefix?: string;
       optionalServices?: string[];
       allowDuplicates?: boolean;
@@ -144,6 +140,9 @@ export class NativeBleTransport implements BleTransport {
   private reconnectsLeft = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private opening = false;
+  private link: MeshLink | null = null;
+  private draining = false;
+  private drainAgain = false;
 
   constructor(private readonly injected?: NativeCentral) {}
 
@@ -164,8 +163,8 @@ export class NativeBleTransport implements BleTransport {
     await central.stopLEScan?.().catch(() => undefined);
     if (!central.requestLEScan) {
       const device = await central.requestDevice({
+        services: [LIVE_SERVICE_UUID],
         namePrefix: BLE_NAME_PREFIX,
-        optionalServices: [LIVE_SERVICE_UUID],
         displayMode: "list",
       });
       onPeer({ deviceId: device.deviceId, name: device.name || BLE_NAME_PREFIX });
@@ -173,14 +172,14 @@ export class NativeBleTransport implements BleTransport {
     }
     await central.requestLEScan(
       {
-        optionalServices: [LIVE_SERVICE_UUID],
+        services: [LIVE_SERVICE_UUID],
         // Keep listening. The first packet often has no name, and iOS will not
         // deliver another if duplicates are suppressed.
         allowDuplicates: true,
       },
       (result) => {
         const name = boardName(result);
-        if (!isBoardName(name)) return;
+        if (!isMeshPeer(result)) return;
         onPeer({ deviceId: result.device.deviceId, name });
       },
     );
@@ -229,19 +228,14 @@ export class NativeBleTransport implements BleTransport {
   }
 
   async writeCommand(command: AppCommand): Promise<void> {
+    if (command.type !== CmdType.CHECK_IN) return;
     const central = this.central;
     const deviceId = this.deviceId;
-    const target = this.writeTarget;
-    if (!central || !deviceId || !target) {
+    if (!central || !deviceId || !this.writeTarget) {
       throw new Error("The beacon is not ready for commands yet.");
     }
-    const payload = encodeCommand(command);
-    const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-    if (target.withoutResponse) {
-      await central.writeWithoutResponse(deviceId, LIVE_SERVICE_UUID, target.uuid, view);
-      return;
-    }
-    await central.write(deviceId, LIVE_SERVICE_UUID, target.uuid, view);
+    if (!this.link) throw new Error("The beacon is not ready for commands yet.");
+    await this.link.sendCheckIn();
   }
 
   private async pickDevice(central: NativeCentral): Promise<NativeDevice> {
@@ -252,8 +246,8 @@ export class NativeBleTransport implements BleTransport {
       return this.scanForLeader(central);
     }
     return central.requestDevice({
+      services: [LIVE_SERVICE_UUID],
       namePrefix: BLE_NAME_PREFIX,
-      optionalServices: [LIVE_SERVICE_UUID],
       displayMode: "list",
     });
   }
@@ -279,12 +273,12 @@ export class NativeBleTransport implements BleTransport {
       }, 12000);
       void scan(
         {
-          optionalServices: [LIVE_SERVICE_UUID],
+          services: [LIVE_SERVICE_UUID],
           allowDuplicates: true,
         },
         (result) => {
           const name = boardName(result);
-          if (!isBoardName(name)) return;
+          if (!isMeshPeer(result)) return;
           finish({ deviceId: result.device.deviceId, name });
         },
       ).catch((error: unknown) => finish(undefined, explainBleError(error)));
@@ -326,46 +320,34 @@ export class NativeBleTransport implements BleTransport {
           `The phone is connected, but the beacon does not expose ${LIVE_SERVICE_UUID}.`,
         );
       }
-      const tx = service.characteristics.find((item) => sameUuid(item.uuid, LIVE_TX_UUID));
-      if (!tx) {
-        throw new Error(
-          `${BLE_NAME_PREFIX} is missing the notify characteristic ${LIVE_TX_UUID}.`,
-        );
+      const fromNum = service.characteristics.find((item) => sameUuid(item.uuid, LIVE_TX_UUID));
+      if (!fromNum) {
+        throw new Error(`${BLE_NAME_PREFIX} is missing the FromNum characteristic ${LIVE_TX_UUID}.`);
       }
-      const rx = service.characteristics.find((item) => sameUuid(item.uuid, LIVE_RX_UUID));
-      if (!rx) {
-        throw new Error(
-          `${BLE_NAME_PREFIX} is missing the write characteristic ${LIVE_RX_UUID}.`,
-        );
+      const toRadio = service.characteristics.find((item) => sameUuid(item.uuid, LIVE_RX_UUID));
+      if (!toRadio) {
+        throw new Error(`${BLE_NAME_PREFIX} is missing the ToRadio characteristic ${LIVE_RX_UUID}.`);
       }
-      this.writeTarget = {
-        uuid: LIVE_RX_UUID,
-        withoutResponse: rx.properties.writeWithoutResponse && !rx.properties.write,
-      };
+      const fromRadio = service.characteristics.find((item) => sameUuid(item.uuid, FROM_RADIO_UUID));
+      if (!fromRadio) {
+        throw new Error(`${BLE_NAME_PREFIX} is missing the FromRadio characteristic ${FROM_RADIO_UUID}.`);
+      }
+      this.writeTarget = { uuid: LIVE_RX_UUID, withoutResponse: false };
+      this.link = new MeshLink(
+        (bytes) => this.writeMesh(central, device.deviceId, bytes),
+        (event) => this.emit(event),
+      );
 
       await this.subscribeChar(central, device.deviceId, LIVE_TX_UUID);
-      await this.subscribeIfPresent(central, device.deviceId, service, LEADER_STATUS_UUID);
-      await this.subscribeIfPresent(central, device.deviceId, service, FOLLOWER_STATUS_UUID);
-      await this.subscribeIfPresent(central, device.deviceId, service, ALERT_UUID);
-
       writeStorage(DEVICE_ID_KEY, device.deviceId);
       writeStorage(DEVICE_NAME_KEY, this.deviceName);
       this.reconnectsLeft = RECONNECT_ATTEMPTS;
       this.emit({ type: "connected", deviceName: this.deviceName });
+      await this.link.configure();
+      await this.drain(central, device.deviceId);
     } finally {
       this.opening = false;
     }
-  }
-
-  private async subscribeIfPresent(
-    central: NativeCentral,
-    deviceId: string,
-    service: GattService,
-    uuid: string,
-  ): Promise<void> {
-    const found = service.characteristics.find((item) => sameUuid(item.uuid, uuid));
-    if (!found || (!found.properties.notify && !found.properties.indicate)) return;
-    await this.subscribeChar(central, deviceId, uuid);
   }
 
   private async subscribeChar(
@@ -373,17 +355,42 @@ export class NativeBleTransport implements BleTransport {
     deviceId: string,
     characteristic: string,
   ): Promise<void> {
-    await central.startNotifications(deviceId, LIVE_SERVICE_UUID, characteristic, (value) => {
-      this.onBytes(viewToBytes(value));
+    await central.startNotifications(deviceId, LIVE_SERVICE_UUID, characteristic, () => {
+      const current = this.central;
+      const id = this.deviceId;
+      if (!current || !id) return;
+      void this.drain(current, id);
     });
   }
 
-  private onBytes(bytes: Uint8Array): void {
+  private async writeMesh(central: NativeCentral, deviceId: string, bytes: Uint8Array): Promise<void> {
+    const copy = new Uint8Array(bytes);
+    await central.write(deviceId, LIVE_SERVICE_UUID, LIVE_RX_UUID, new DataView(copy.buffer));
+  }
+
+  /** FromNum only says the queue moved. Each read is one FromRadio protobuf. */
+  private async drain(central: NativeCentral, deviceId: string): Promise<void> {
+    if (this.draining) {
+      this.drainAgain = true;
+      return;
+    }
+    this.draining = true;
     try {
-      for (const event of eventsFromNotify(bytes)) this.emit(event);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Bad packet from the beacon.";
-      this.emit({ type: "error", message });
+      do {
+        this.drainAgain = false;
+        for (let n = 0; n < 40; n++) {
+          let bytes: Uint8Array;
+          try {
+            bytes = viewToBytes(await central.read(deviceId, LIVE_SERVICE_UUID, FROM_RADIO_UUID));
+          } catch {
+            break;
+          }
+          if (bytes.length === 0) break;
+          this.link?.push(bytes);
+        }
+      } while (this.drainAgain && this.wantLink);
+    } finally {
+      this.draining = false;
     }
   }
 
@@ -425,24 +432,13 @@ async function prepareCentral(central: NativeCentral): Promise<void> {
 }
 
 function boardName(result: NativeScanResult): string {
-  // The advertisement is the name the board is sending now. peripheral.name
-  // can still be Leader_Device_LoRa from the last time this phone connected.
-  const advertised = result.localName || "";
-  if (isBoardName(advertised)) return advertised;
-  const marked = nameFromMarker(result.manufacturerData);
-  if (marked) return marked;
-  return result.device.name || "";
+  return result.localName || result.device.name || BLE_NAME_PREFIX;
 }
 
-function nameFromMarker(manufacturerData: { [key: string]: DataView } | undefined): string | null {
-  const payload = manufacturerData?.[BOARD_COMPANY_ID];
-  if (!payload || payload.byteLength < 1) return null;
-  const node = payload.getUint8(0).toString(16).padStart(2, "0").toUpperCase();
-  return `${BLE_NAME_PREFIX}${node}`;
-}
-
-function isBoardName(name: string): boolean {
-  return name.startsWith(BLE_NAME_PREFIX) || name.startsWith(LEGACY_NAME);
+function isMeshPeer(result: NativeScanResult): boolean {
+  const name = `${result.localName ?? ""} ${result.device.name ?? ""}`.toLowerCase();
+  if (name.includes(BLE_NAME_PREFIX.toLowerCase())) return true;
+  return (result.uuids ?? []).some((uuid) => sameUuid(uuid, LIVE_SERVICE_UUID));
 }
 
 async function loadCapacitorBle(): Promise<NativeCentral> {

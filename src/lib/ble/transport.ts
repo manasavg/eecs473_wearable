@@ -26,7 +26,13 @@ export type BleEvent =
       text: string | null;
       hex: string;
       gps?: { fix: boolean; lat: number | null; lon: number | null } | null;
-      followerGps?: { id?: number; fix: boolean; lat: number | null; lon: number | null } | null;
+      followerGps?: {
+        id?: number;
+        fix: boolean;
+        lat: number | null;
+        lon: number | null;
+        name?: string | null;
+      } | null;
       separation?: { id?: number; known: boolean; meters: number | null } | null;
       /** Set when a follower LoRa OK includes that board's id. */
       okId?: number | null;
