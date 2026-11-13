@@ -8,10 +8,10 @@
   "plugins": {
     "BluetoothLe": {
       "displayStrings": {
-        "scanning": "Looking for Leader_Device_LoRa…",
+        "scanning": "Looking for Meshtastic…",
         "cancel": "Cancel",
         "availableDevices": "Beacons",
-        "noDeviceFound": "No Leader_Device_LoRa in range. Is the ESP32 advertising?"
+        "noDeviceFound": "No Meshtastic in range. Is the ESP32 advertising?"
       }
     },
     "LocalNotifications": {
