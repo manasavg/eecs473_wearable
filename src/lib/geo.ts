@@ -1,16 +1,3 @@
-/** Meters between two GPS coordinates. */
-export function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const radius = 6371000;
-  const toRad = Math.PI / 180;
-  const dLat = (lat2 - lat1) * toRad;
-  const dLon = (lon2 - lon1) * toRad;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const clamped = Math.min(1, Math.max(0, a));
-  return 2 * radius * Math.asin(Math.sqrt(clamped));
-}
-
 /** Bearing from point 1 to point 2, degrees clockwise from true north. */
 export function bearingDegrees(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const toRad = Math.PI / 180;

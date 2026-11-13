@@ -8,8 +8,8 @@ export function formatSeparation(meters: number | null): string {
   return `${meters.toFixed(1)} m`;
 }
 
-/** Node number in hex. Small ids stay two digits; Meshtastic ids print in full. */
+/** Same two hex digits the board puts in its Bluetooth name. */
 export function boardLabel(id: number): string {
-  const hex = (id >>> 0).toString(16).toUpperCase();
-  return `Board ${hex.length < 2 ? hex.padStart(2, "0") : hex}`;
+  const hex = (id & 0xff).toString(16).toUpperCase().padStart(2, "0");
+  return `Board ${hex}`;
 }

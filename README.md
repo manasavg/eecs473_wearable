@@ -2,11 +2,11 @@
 
 Leader phone app for three identical Heltec boards. LoRa check-in, distance and direction to each follower, and an out-of-range light plus phone notification.
 
-All three Heltecs run Meshtastic firmware, flashed from https://flasher.meshtastic.org/ for the matching V4 or V4-R8 board. Use the same region and channel on every board. The phone lists nodes whose name starts with `Meshtastic`. The board you tap is the leader: the app reads that node's database for the other two. Disconnect and tap a different board to swap.
+All three boards run `firmware/excursion_device/excursion_device.ino`. Each one advertises as `Excursion_` plus the last byte of its Bluetooth MAC, for example `Excursion_A3`. The phone lists those names. The board you tap becomes the leader and is the only one that uses the app. The other two stay followers. Disconnect and tap a different board to swap the role.
 
-The phone uses Meshtastic's own client. The Heltec V4 firmware already runs the SX1262 LoRa radio and the GPS port: GPIO 38 toward the GPS module, GPIO 39 toward the board, 9600 baud. Wire the NEO-6M there, with VCC to 5V and GND to GND. The antennas need a view of the sky.
+The leader asks each follower by id (`PING 163`, `PING 163 FAR`, `PING 163 NEAR`) so the two followers do not transmit at the same time. A follower answers `POS 163 42.331427 -83.045754`. `FAR` turns that follower light on. `NEAR` turns it off. The OK button sends `OK 163`.
 
-Check-in uses Meshtastic text. A board shows OK when it confirms the message. The red LED on a far board is not part of stock Meshtastic.
+Each NEO-6M TX goes to that board's GPIO 47, GND to GND, VCC to 5V. Do not use GPIO 16 or 17. GPIO 17 is the OLED data line. The antennas need a view of the sky. The OLED is only for check-in. Compile the sketch as the ESP32 Heltec board.
 
 ## Run
 
@@ -19,9 +19,11 @@ Open http://127.0.0.1:4317.
 
 On the iPhone project: `git pull`, then `npm run cap:sync`, then Run in Xcode. That copies the already built app into the Xcode project. It does not compile, and it does not run `xcodebuild`. In the app, tap Find devices and choose the board that should be the leader.
 
-## Firmware
+## Flash
 
-The boards run Meshtastic, not `firmware/excursion_device/excursion_device.ino`. That sketch is the previous radio program. Flashing Meshtastic replaces it on the chip. To put it back, upload that sketch from the Arduino IDE.
+Flash `firmware/excursion_device/excursion_device.ino` onto all three Heltecs. The old `leader_device` and `follower_device` sketches are retired and will not compile.
+
+The serial monitor is 115200. At boot each board prints `NODE Excursion_XX` and its MAC so you can match the list in the app. GPS is 9600 on Serial2, not the USB monitor.
 
 ```bash
 npm test

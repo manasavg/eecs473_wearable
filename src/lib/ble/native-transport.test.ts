@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createTransport } from "./create-transport.ts";
-import { fromBinary } from "@bufbuild/protobuf";
-import { Mesh } from "@meshtastic/protobufs";
+import { encodeCommand } from "./protocol.ts";
 import { NativeBleTransport, rememberedNativeBeaconName, type NativeCentral } from "./native-transport.ts";
 import { CmdType } from "./types.ts";
-import { BLE_NAME_PREFIX, FROM_RADIO_UUID, LIVE_RX_UUID, LIVE_SERVICE_UUID, LIVE_TX_UUID } from "./uuids.ts";
+import { BLE_NAME_PREFIX, LIVE_RX_UUID, LIVE_SERVICE_UUID, LIVE_TX_UUID } from "./uuids.ts";
 import { WebBluetoothTransport } from "./web-bluetooth-transport.ts";
 import type { BleEvent } from "./transport.ts";
 
@@ -56,7 +55,7 @@ class FakeCentral implements NativeCentral {
           {
             uuid: LIVE_TX_UUID.toUpperCase(),
             properties: {
-              read: true,
+              read: false,
               write: false,
               writeWithoutResponse: false,
               notify: true,
@@ -73,22 +72,12 @@ class FakeCentral implements NativeCentral {
               indicate: false,
             },
           },
-          {
-            uuid: FROM_RADIO_UUID.toUpperCase(),
-            properties: {
-              read: true,
-              write: false,
-              writeWithoutResponse: false,
-              notify: false,
-              indicate: false,
-            },
-          },
         ],
       },
     ];
   }
   async read(): Promise<DataView> {
-    return new DataView(new ArrayBuffer(0));
+    return new DataView(new Uint8Array([0]).buffer);
   }
   async write(
     _deviceId: string,
@@ -127,31 +116,25 @@ describe("NativeBleTransport", () => {
     assert.equal(createTransport("beacon") instanceof WebBluetoothTransport, true);
   });
 
-  it("subscribes to FromNum and asks the node for its database", async () => {
+  it("subscribes to Leader_Device and shows the counter", async () => {
     const central = new FakeCentral();
     const link = new NativeBleTransport(central);
     const events = eventsOf(link);
     await link.connect();
     assert.equal(central.requestCount, 1);
-    assert.deepEqual(central.requestOptions?.services, [LIVE_SERVICE_UUID]);
+    assert.equal(central.requestOptions?.services, undefined);
     assert.equal(central.requestOptions?.namePrefix, BLE_NAME_PREFIX);
     assert.deepEqual(central.subscribed, [LIVE_TX_UUID]);
     assert.equal(central.connectOptions?.skipDescriptorDiscovery, true);
     assert.equal(central.connectOptions?.timeout, 20000);
     assert.equal(events.some((event) => event.type === "connected" && event.deviceName === BLE_NAME_PREFIX), true);
-    assert.equal(central.writtenTo[0], LIVE_RX_UUID);
-    const hello = fromBinary(Mesh.ToRadioSchema, central.writes[0]);
-    assert.equal(hello.payloadVariant.case, "wantConfigId");
+    central.push(new Uint8Array([5]));
+    assert.equal(events.some((event) => event.type === "live" && event.counter === 5), true);
     assert.equal(rememberedNativeBeaconName(), BLE_NAME_PREFIX);
 
     await link.writeCommand({ type: CmdType.CHECK_IN, targetId: 2, thresholdMeters: 0 });
-    const sent = fromBinary(Mesh.ToRadioSchema, central.writes[1]);
-    assert.equal(sent.payloadVariant.case, "packet");
-    if (sent.payloadVariant.case !== "packet") return;
-    assert.equal(sent.payloadVariant.value.payloadVariant.case, "decoded");
-    if (sent.payloadVariant.value.payloadVariant.case !== "decoded") return;
-    const text = new TextDecoder().decode(sent.payloadVariant.value.payloadVariant.value.payload);
-    assert.equal(text, "CHECK IN");
+    assert.deepEqual(central.writtenTo, [LIVE_RX_UUID]);
+    assert.deepEqual([...central.writes[0]], [...encodeCommand({ type: CmdType.CHECK_IN, targetId: 2, thresholdMeters: 0 })]);
     await link.disconnect();
   });
 
@@ -181,10 +164,10 @@ describe("NativeBleTransport", () => {
       callback({ device: { deviceId: "board-a" }, localName: `${BLE_NAME_PREFIX}A3` });
       callback({ device: { deviceId: "board-a" }, localName: `${BLE_NAME_PREFIX}A3` });
       callback({ device: { deviceId: "unnamed" } });
-      callback({ device: { deviceId: "board-b", name: "Other" }, localName: `${BLE_NAME_PREFIX}_1F` });
+      callback({ device: { deviceId: "board-b", name: "Other" }, localName: `${BLE_NAME_PREFIX}1F` });
       callback({
-        device: { deviceId: "board-f1", name: "Hiker" },
-        uuids: [LIVE_SERVICE_UUID],
+        device: { deviceId: "board-f1", name: "Leader_Device_LoRa" },
+        manufacturerData: { "65535": new DataView(Uint8Array.of(0xf1).buffer) },
       });
     };
     central.stopLEScan = async () => {
@@ -196,14 +179,14 @@ describe("NativeBleTransport", () => {
     assert.deepEqual(names, [
       `${BLE_NAME_PREFIX}A3`,
       `${BLE_NAME_PREFIX}A3`,
-      `${BLE_NAME_PREFIX}_1F`,
-      "Hiker",
+      `${BLE_NAME_PREFIX}1F`,
+      `${BLE_NAME_PREFIX}F1`,
     ]);
-    await link.connect(false, { deviceId: "board-b", name: `${BLE_NAME_PREFIX}_1F` });
+    await link.connect(false, { deviceId: "board-b", name: `${BLE_NAME_PREFIX}1F` });
     assert.equal(central.requestCount, 0);
     assert.equal(central.connectedId, "board-b");
     assert.equal(stopped, true);
-    assert.equal(rememberedNativeBeaconName(), `${BLE_NAME_PREFIX}_1F`);
+    assert.equal(rememberedNativeBeaconName(), `${BLE_NAME_PREFIX}1F`);
     await link.disconnect();
   });
 

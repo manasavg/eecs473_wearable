@@ -1,26 +1,32 @@
 /**
- * Meshtastic Phone API over BLE. The Heltec runs Meshtastic firmware.
- * The phone writes ToRadio, reads FromRadio, and subscribes to FromNum.
+ * GATT map for the ESP32 sketch in firmware/leader_device/leader_device.ino.
+ * The phone is the central. That sketch is the peripheral.
  *
- *   Service    6ba1b218-15a8-461f-9fa8-5dcae273eafd
- *   ToRadio    f75c76d2-129e-4dad-a1dd-7866124401e7  write
- *   FromRadio  2c55e69e-4993-11ed-b878-0242ac120002  read
- *   FromNum    ed9da18c-a800-4f66-a670-aa7547e34453  notify
+ *   BLEDevice::init("Excursion_XX");  // XX is the last Bluetooth MAC byte
+ *   SERVICE_UUID           20b723dd-215e-4424-bd75-746a902408bb
+ *   CHARACTERISTIC_UUID_RX 0be48bf3-86c4-4d13-8e2c-2ac0a569817c  write
+ *   CHARACTERISTIC_UUID_TX 209989cd-1fc7-4eb1-979e-690ba55053da  notify
+ *
+ * setup() does not add the service UUID to the advertising packet. The phone
+ * finds names that start with Excursion_, then opens this service. loop() notifies
+ * one uint8 on TX every 3 seconds, and a 10-byte GPS fix when the NEO-6M
+ * reports RMC or GGA. onWrite on RX treats a first byte of 1 as the flag
+ * that transmits LoRa "CHECK IN".
+ *
+ * Appendix C characteristic UUIDs below are not on that sketch. The transport
+ * subscribes to them only when the ESP32 adds them to this same service.
  */
 
-export const BLE_NAME_PREFIX = "Meshtastic";
+export const BLE_NAME_PREFIX = "Excursion_";
 
-/** Mesh service advertised by the Meshtastic firmware. */
-export const LIVE_SERVICE_UUID = "6ba1b218-15a8-461f-9fa8-5dcae273eafd";
+/** Service created by the flashed sketch. It is not in the advertising packet. */
+export const LIVE_SERVICE_UUID = "20b723dd-215e-4424-bd75-746a902408bb";
 
-/** ToRadio. PROPERTY_WRITE. One ToRadio protobuf per write. */
-export const LIVE_RX_UUID = "f75c76d2-129e-4dad-a1dd-7866124401e7";
+/** RX. PROPERTY_WRITE. A first byte of 1 makes the sketch send LoRa "CHECK IN". */
+export const LIVE_RX_UUID = "0be48bf3-86c4-4d13-8e2c-2ac0a569817c";
 
-/** FromNum. PROPERTY_NOTIFY. A 4-byte counter. The payload is read from FromRadio. */
-export const LIVE_TX_UUID = "ed9da18c-a800-4f66-a670-aa7547e34453";
-
-/** FromRadio. PROPERTY_READ. One FromRadio protobuf per read. Empty means the queue is drained. */
-export const FROM_RADIO_UUID = "2c55e69e-4993-11ed-b878-0242ac120002";
+/** TX. PROPERTY_NOTIFY. One uint8, incremented every 3 seconds. */
+export const LIVE_TX_UUID = "209989cd-1fc7-4eb1-979e-690ba55053da";
 
 /** Older name for the write characteristic. */
 export const LIVE_DATA_UUID = LIVE_RX_UUID;

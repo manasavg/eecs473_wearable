@@ -1,4 +1,4 @@
-import { haversineMeters, isOutOfRange } from "../geo";
+import { isOutOfRange } from "../geo";
 import { BROADCAST_ID, DEFAULT_THRESHOLD_M } from "./constants";
 import { createTransport, type LinkMode } from "./create-transport";
 import { isFollowerOkSignal } from "./live-link";
@@ -72,8 +72,6 @@ export interface ActivityEntry {
 /** One of the other boards, tracked by the leader the phone is connected to. */
 export interface TrackedFollower {
   id: number;
-  /** Meshtastic long name, when the radio has one. */
-  name: string | null;
   fix: boolean | null;
   lat: number | null;
   lon: number | null;
@@ -108,8 +106,6 @@ export interface AppState {
   groupOkAt: number | null;
   /** Board id from that OK, when the radio included one. */
   groupOkId: number | null;
-  /** Every follower that acknowledged this check-in. */
-  okIds: number[];
   /** Null until the first GPS packet. False when the NEO-6M has not locked. */
   gpsFix: boolean | null;
   gpsLat: number | null;
@@ -142,7 +138,6 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
     groupCheckInAt: null,
     groupOkAt: null,
     groupOkId: null,
-    okIds: [],
     gpsFix: null,
     gpsLat: null,
     gpsLon: null,
@@ -179,7 +174,6 @@ function upsertTracked(
   const previous = followers.find((follower) => follower.id === id);
   const next: TrackedFollower = {
     id,
-    name: patch.name !== undefined ? patch.name : (previous?.name ?? null),
     fix: patch.fix !== undefined ? patch.fix : (previous?.fix ?? null),
     lat: patch.lat !== undefined ? patch.lat : (previous?.lat ?? null),
     lon: patch.lon !== undefined ? patch.lon : (previous?.lon ?? null),
@@ -190,27 +184,6 @@ function upsertTracked(
   };
   next.outOfRange = isOutOfRange(next.separationKnown, next.separationM, thresholdMeters);
   return [...followers.filter((follower) => follower.id !== id), next].sort((a, b) => a.id - b.id);
-}
-
-/** Meters between the leader fix and each follower fix. Meshtastic reports the coordinates. */
-function fillDistance(
-  followers: TrackedFollower[],
-  gpsFix: boolean | null,
-  gpsLat: number | null,
-  gpsLon: number | null,
-  thresholdMeters: number,
-): TrackedFollower[] {
-  if (gpsFix !== true || gpsLat == null || gpsLon == null) return followers;
-  return followers.map((follower) => {
-    if (follower.fix !== true || follower.lat == null || follower.lon == null) return follower;
-    const meters = haversineMeters(gpsLat, gpsLon, follower.lat, follower.lon);
-    return {
-      ...follower,
-      separationKnown: true,
-      separationM: meters,
-      outOfRange: isOutOfRange(true, meters, thresholdMeters),
-    };
-  });
 }
 
 export class ExcursionAppClient {
@@ -392,7 +365,7 @@ export class ExcursionAppClient {
     }
     const now = Date.now();
     this.commit(
-      { ...this.state, groupCheckInAt: now, groupOkAt: null, groupOkId: null, okIds: [], error: null },
+      { ...this.state, groupCheckInAt: now, groupOkAt: null, groupOkId: null, error: null },
       { id: nextId(), at: now, kind: "checkin" },
     );
   }
@@ -468,7 +441,6 @@ export class ExcursionAppClient {
               fix: event.followerGps.fix,
               lat: event.followerGps.lat,
               lon: event.followerGps.lon,
-              ...(event.followerGps.name ? { name: event.followerGps.name } : {}),
             },
             this.state.thresholdMeters,
           );
@@ -484,24 +456,16 @@ export class ExcursionAppClient {
             this.state.thresholdMeters,
           );
         }
-        const gpsFix = gps ? gps.fix : this.state.gpsFix;
-        const gpsLat = gps ? gps.lat : this.state.gpsLat;
-        const gpsLon = gps ? gps.lon : this.state.gpsLon;
-        followers = fillDistance(followers, gpsFix, gpsLat, gpsLon, this.state.thresholdMeters);
         this.commit(
           projectFollowers(
             {
               ...this.state,
               lastPacketAt: now,
               groupOkAt: followerOk ? now : this.state.groupOkAt,
-              groupOkId: followerOk ? (event.okId ?? this.state.groupOkId) : this.state.groupOkId,
-              okIds:
-                followerOk && event.okId != null
-                  ? [...new Set([...this.state.okIds, event.okId])]
-                  : this.state.okIds,
-              gpsFix,
-              gpsLat,
-              gpsLon,
+              groupOkId: followerOk ? (event.okId ?? null) : this.state.groupOkId,
+              gpsFix: gps ? gps.fix : this.state.gpsFix,
+              gpsLat: gps ? gps.lat : this.state.gpsLat,
+              gpsLon: gps ? gps.lon : this.state.gpsLon,
               liveLink: {
                 counter: event.counter ?? this.state.liveLink?.counter ?? null,
                 text: event.text ?? this.state.liveLink?.text ?? null,

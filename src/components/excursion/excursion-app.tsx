@@ -8,6 +8,7 @@ import { webBluetoothAvailable } from "@/lib/ble/web-bluetooth-transport";
 import { bearingDegrees, cardinalLabel, guideCue, relativeBearing } from "@/lib/geo";
 import { boardLabel, formatGpsDegrees, formatSeparation } from "@/lib/format";
 import { ensureNotifyPermission, notifyOutOfRange } from "@/lib/notify";
+import { BLE_NAME_PREFIX } from "@/lib/ble/uuids";
 import { useCompass } from "./use-compass";
 import { useExcursion } from "./use-excursion";
 
@@ -45,18 +46,12 @@ export function ExcursionApp() {
     wasOut.current = next;
   }, [state.followers, state.thresholdMeters]);
 
-  const okNames = state.okIds.map((id) => {
-    const follower = state.followers.find((item) => item.id === id);
-    return follower?.name || boardLabel(id);
-  });
   const checkInLabel = state.groupOkAt
-    ? okNames.length > 0
-      ? `${okNames.join(" and ")} OK`
-      : state.groupOkId != null
-        ? `${boardLabel(state.groupOkId)} is OK`
-        : "They're OK"
+    ? state.groupOkId != null
+      ? `${boardLabel(state.groupOkId)} is OK`
+      : "They're OK"
     : state.groupCheckInAt
-      ? "Waiting for the other boards"
+      ? "Waiting for OK"
       : "Not sent";
   const outFollowers = state.followers.filter((follower) => follower.outOfRange);
 
@@ -67,8 +62,8 @@ export function ExcursionApp() {
       {!onLink ? (
         <div className="mt-6 flex flex-col gap-4">
           <p className="text-sm text-neutral-600">
-            Three Meshtastic boards. Pick any one. That board is the leader, and it reports the other two.
-            Disconnect and pick a different board to swap.
+            Three boards, one sketch. Pick any {BLE_NAME_PREFIX} board. That one becomes the leader.
+            The other two are followers until you disconnect and pick a different board.
           </p>
           {(state.error || app.scanError) && (
             <p className="text-sm text-red-700" role="alert">
@@ -89,7 +84,7 @@ export function ExcursionApp() {
                 {app.scanning ? "Looking" : "Find devices"}
               </button>
               {app.scanning && app.peers.length === 0 && (
-                <p className="text-sm text-neutral-600">Looking for Meshtastic boards…</p>
+                <p className="text-sm text-neutral-600">Looking for Excursion boards…</p>
               )}
               {app.peers.length > 0 && (
                 <ul className="flex flex-col gap-2">
@@ -112,7 +107,7 @@ export function ExcursionApp() {
               )}
               {looked && !app.scanning && app.peers.length === 0 && !app.scanError && (
                 <p className="text-sm text-neutral-600">
-                  No Meshtastic boards in range. Power all three on, then look again.
+                  No Excursion boards in range. Power all three on, then look again.
                 </p>
               )}
             </>
@@ -180,7 +175,7 @@ export function ExcursionApp() {
           )}
 
           <section>
-            <h2 className="text-sm font-medium">Check-in</h2>
+            <h2 className="text-sm font-medium">LoRa</h2>
             <p className="mt-2 text-2xl">{checkInLabel}</p>
             <button
               type="button"
@@ -191,7 +186,7 @@ export function ExcursionApp() {
               Check in
             </button>
             <p className="mt-2 text-sm text-neutral-600">
-              Sends CHECK IN to each other board. A board shows OK when it confirms it got the message. An OK text counts too.
+              Writes the leader radio. A follower sends OK back over LoRa, then this line names that board.
             </p>
             {state.liveLink?.counter != null && (
               <p className="mt-2 text-sm text-neutral-500">Link counter {state.liveLink.counter}</p>
@@ -202,8 +197,8 @@ export function ExcursionApp() {
             <h2 className="text-sm font-medium">Followers</h2>
             <p className="mt-2 text-sm text-neutral-600">
               {state.followers.length === 0
-                ? "Waiting for the other two boards. They show up when this radio hears them. Nodes from the public internet are left out."
-                : "The other boards this radio has heard. Both GPS antennas need a view of the sky."}
+                ? "Waiting for the other boards. They answer over LoRa once this leader asks."
+                : "Direction and distance for each follower. Both GPS antennas need a view of the sky."}
             </p>
             {(compass.needsGesture || compass.heading == null) && (
               <button
@@ -223,7 +218,6 @@ export function ExcursionApp() {
               {state.followers.map((follower) => (
                 <FollowerCard
                   key={follower.id}
-                  ok={state.okIds.includes(follower.id)}
                   follower={follower}
                   leaderFix={state.gpsFix}
                   leaderLat={state.gpsLat}
@@ -304,14 +298,12 @@ export function ExcursionApp() {
 
 function FollowerCard({
   follower,
-  ok,
   leaderFix,
   leaderLat,
   leaderLon,
   heading,
 }: {
   follower: TrackedFollower;
-  ok: boolean;
   leaderFix: boolean | null;
   leaderLat: number | null;
   leaderLon: number | null;
@@ -328,14 +320,11 @@ function FollowerCard({
     followerLon != null;
   const bearing = ready ? bearingDegrees(leaderLat, leaderLon, followerLat, followerLon) : null;
   const arrow = bearing == null ? null : heading == null ? bearing : relativeBearing(bearing, heading);
-  const label = follower.name || boardLabel(follower.id);
+  const label = boardLabel(follower.id);
 
   return (
     <article className={`border px-3 py-3 ${follower.outOfRange ? "border-red-700" : "border-neutral-200"}`}>
-      <h3 className="text-sm font-medium">
-        {label}
-        {ok ? " · OK" : ""}
-      </h3>
+      <h3 className="text-sm font-medium">{label}</h3>
       <p className="mt-2 text-3xl tabular-nums">
         {follower.separationKnown === true
           ? formatSeparation(follower.separationM)
