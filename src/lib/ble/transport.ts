@@ -20,18 +20,30 @@ export type BleEvent =
   | { type: "follower"; info: FollowerInfo; lab?: LabSample }
   | { type: "alert"; deviceId: number; status: Status; uwbOutOfRange: boolean }
   | { type: "roster-cleared" }
+  /** Any packet from a board the leader is tracking. */
+  | { type: "heard"; id: number; at: number }
+  /** A CHECK IN for this board reached the leader's send queue. */
+  | { type: "checkin-sent"; id: number; packetId: number }
+  /** The board itself acknowledged that CHECK IN. */
+  | { type: "checkin-ack"; id: number; packetId: number }
+  /** The radio gave up on that CHECK IN. */
+  | { type: "checkin-failed"; id: number; packetId: number; noAnswer: boolean; reason: string }
   | {
       type: "live";
       counter: number | null;
       text: string | null;
       hex: string;
-      gps?: { fix: boolean; lat: number | null; lon: number | null } | null;
+      gps?: { fix: boolean; lat: number | null; lon: number | null; at?: number | null } | null;
       followerGps?: {
         id?: number;
         fix: boolean;
         lat: number | null;
         lon: number | null;
         name?: string | null;
+        /** When the leader last heard this board. Null when the radio has no clock. */
+        heardAt?: number | null;
+        /** When this position was taken. Left out when the event has no position. */
+        positionAt?: number | null;
       } | null;
       separation?: { id?: number; known: boolean; meters: number | null } | null;
       /** Set when a follower LoRa OK includes that board's id. */

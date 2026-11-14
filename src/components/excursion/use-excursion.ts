@@ -6,6 +6,7 @@ import { isNativeShell } from "@/lib/ble/create-transport";
 import { rememberedNativeBeaconName } from "@/lib/ble/native-transport";
 import type { BlePeer } from "@/lib/ble/transport";
 import { rememberedBeaconName } from "@/lib/ble/web-bluetooth-transport";
+import { loadSettings, saveSettings } from "@/lib/settings";
 
 export function useExcursion() {
   const clientRef = useRef<ExcursionAppClient | null>(null);
@@ -18,6 +19,12 @@ export function useExcursion() {
   const [peers, setPeers] = useState<BlePeer[]>([]);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const saved = loadSettings();
+    client.setThreshold(saved.thresholdMeters);
+    client.setSilenceSeconds(saved.silenceSeconds);
+  }, [client]);
 
   useEffect(() => {
     if (isNativeShell()) setRememberedName(rememberedNativeBeaconName());
@@ -95,14 +102,13 @@ export function useExcursion() {
     [client],
   );
 
-  const setRange = useCallback(
-    async (meters: number) => {
+  /** Save the range and silence limits on the phone. They apply right away. */
+  const saveLimits = useCallback(
+    (meters: number, silenceSeconds: number) => {
       client.setThreshold(meters);
-      try {
-        await client.writeThreshold();
-      } catch {
-        // The client stores the message on state.error.
-      }
+      client.setSilenceSeconds(silenceSeconds);
+      const next = client.getState();
+      saveSettings({ thresholdMeters: next.thresholdMeters, silenceSeconds: next.silenceSeconds });
     },
     [client],
   );
@@ -119,7 +125,7 @@ export function useExcursion() {
     connectBeacon,
     leave,
     checkIn,
-    setRange,
+    saveLimits,
     dismissError: () => client.dismissError(),
   };
 }

@@ -20,27 +20,18 @@ export async function ensureNotifyPermission(): Promise<void> {
   if (Notification.permission === "default") await Notification.requestPermission();
 }
 
-export async function notifyOutOfRange(
-  meters: number,
-  limitMeters: number,
-  who = "Follower",
-): Promise<void> {
-  const title = `${who} is out of range`;
-  const body = outOfRangeBody(meters, limitMeters, who);
+let lastId = 0;
+
+/** A phone notification. Does nothing when permission was not granted. */
+export async function notify(title: string, body: string): Promise<void> {
   try {
     if (Capacitor.isNativePlatform()) {
       const { LocalNotifications } = await import("@capacitor/local-notifications");
       const perm = await LocalNotifications.checkPermissions();
       if (perm.display !== "granted") return;
+      lastId = Math.max(lastId + 1, Date.now() % 2147483647) || 1;
       await LocalNotifications.schedule({
-        notifications: [
-          {
-            id: (Date.now() % 2147483647) || 1,
-            title,
-            body,
-            schedule: { at: new Date(Date.now() + 200) },
-          },
-        ],
+        notifications: [{ id: lastId, title, body, schedule: { at: new Date(Date.now() + 200) } }],
       });
       return;
     }
@@ -49,4 +40,27 @@ export async function notifyOutOfRange(
   }
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
   new Notification(title, { body });
+}
+
+export function notifyOutOfRange(meters: number, limitMeters: number, who = "Follower"): Promise<void> {
+  return notify(`${who} is out of range`, outOfRangeBody(meters, limitMeters, who));
+}
+
+export function notifySilent(who: string, seconds: number): Promise<void> {
+  return notify(`Lost contact with ${who}`, `${who} has not been heard for over ${formatDuration(seconds)}.`);
+}
+
+export function notifyNoAnswer(who: string, reason: string): Promise<void> {
+  return notify(`${who} did not answer the check-in`, reason);
+}
+
+/** "45 s", "3 min", "1 h 5 min". */
+export function formatDuration(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s} s`;
+  const minutes = Math.floor(s / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }

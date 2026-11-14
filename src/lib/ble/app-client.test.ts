@@ -318,4 +318,140 @@ describe("ExcursionAppClient", () => {
     const client = new ExcursionAppClient();
     await assert.rejects(() => client.sendCheckIn(1), /Connect the beacon/);
   });
+
+  function clock(start = 1_700_000_000_000) {
+    let now = start;
+    return {
+      now: () => now,
+      advance: (ms: number) => {
+        now += ms;
+      },
+    };
+  }
+
+  function followerAt(transport: ScriptedTransport, id: number, lat: number, heardAt?: number) {
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "",
+      followerGps: { id, fix: true, lat, lon: -83.74, name: `Board ${id}`, heardAt },
+    });
+  }
+
+  it("checks in one board and marks only that board OK on its acknowledgement", async () => {
+    const time = clock();
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ now: time.now });
+    await client.connectDevice("beacon", transport);
+    followerAt(transport, 0xa3, 42.28, time.now());
+    followerAt(transport, 0x1f, 42.28, time.now());
+    await client.sendCheckIn(0xa3);
+    const checkIns = transport.commands.filter((command) => command.type === CmdType.CHECK_IN);
+    assert.deepEqual(checkIns.map((command) => command.targetId), [0xa3]);
+    const card = () => client.getState().followers.find((item) => item.id === 0xa3);
+    assert.equal(card()?.checkIn?.status, "sending");
+    assert.equal(client.getState().followers.find((item) => item.id === 0x1f)?.checkIn, null);
+    transport.emit({ type: "checkin-sent", id: 0xa3, packetId: 77 });
+    assert.equal(card()?.checkIn?.status, "waiting");
+    transport.emit({ type: "checkin-ack", id: 0xa3, packetId: 76 });
+    assert.equal(card()?.checkIn?.status, "waiting");
+    transport.emit({ type: "checkin-ack", id: 0xa3, packetId: 77 });
+    assert.equal(card()?.checkIn?.status, "ok");
+    await client.disconnect();
+  });
+
+  it("checks in every tracked board for the group button", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    for (const id of [0x10, 0x20, 0x30, 0x40]) followerAt(transport, id, 42.28, Date.now());
+    await client.sendCheckIn(BROADCAST_ID);
+    const checkIns = transport.commands.filter((command) => command.type === CmdType.CHECK_IN);
+    assert.deepEqual(checkIns.map((command) => command.targetId), [0x10, 0x20, 0x30, 0x40]);
+    assert.ok(client.getState().followers.every((item) => item.checkIn?.status === "sending"));
+    await client.disconnect();
+  });
+
+  it("shows No answer after the timeout and still accepts a late OK reply", async () => {
+    const time = clock();
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ now: time.now });
+    await client.connectDevice("beacon", transport);
+    followerAt(transport, 0xa3, 42.28, time.now());
+    await client.sendCheckIn(0xa3);
+    time.advance(121_000);
+    client.tick();
+    assert.equal(client.getState().followers[0]?.checkIn?.status, "noAnswer");
+    transport.emit({ type: "live", counter: null, text: "OK", hex: "", okId: 0xa3 });
+    assert.equal(client.getState().followers[0]?.checkIn?.status, "ok");
+    await client.disconnect();
+  });
+
+  it("does not mark a board OK for an OK text when no check-in is open", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    followerAt(transport, 0xa3, 42.28, Date.now());
+    transport.emit({ type: "live", counter: null, text: "OK", hex: "", okId: 0xa3 });
+    assert.equal(client.getState().followers[0]?.checkIn, null);
+    await client.disconnect();
+  });
+
+  it("flags a board that goes silent and clears it when heard again", async () => {
+    const time = clock();
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ now: time.now, silenceSeconds: 60 });
+    await client.connectDevice("beacon", transport);
+    followerAt(transport, 0xa3, 42.28, time.now());
+    assert.equal(client.getState().followers[0]?.silent, false);
+    time.advance(59_000);
+    client.tick();
+    assert.equal(client.getState().followers[0]?.silent, false);
+    time.advance(2_000);
+    client.tick();
+    assert.equal(client.getState().followers[0]?.silent, true);
+    transport.emit({ type: "heard", id: 0xa3, at: time.now() });
+    assert.equal(client.getState().followers[0]?.silent, false);
+    await client.disconnect();
+  });
+
+  it("counts silence from connect for a board the radio never timed", async () => {
+    const time = clock();
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ now: time.now, silenceSeconds: 60 });
+    await client.connectDevice("beacon", transport);
+    followerAt(transport, 0xa3, 42.28);
+    time.advance(61_000);
+    client.tick();
+    assert.equal(client.getState().followers[0]?.silent, true);
+    await client.disconnect();
+  });
+
+  it("drops the distance when either GPS fix is lost", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ thresholdMeters: 40 });
+    await client.connectDevice("beacon", transport);
+    transport.emit({ type: "live", counter: null, text: null, hex: "", gps: { fix: true, lat: 42.28, lon: -83.74 } });
+    followerAt(transport, 0xa3, 42.281, Date.now());
+    const first = client.getState().followers[0];
+    assert.equal(first?.separationKnown, true);
+    assert.equal(first?.outOfRange, true);
+    transport.emit({ type: "live", counter: null, text: null, hex: "", gps: { fix: false, lat: null, lon: null } });
+    const after = client.getState().followers[0];
+    assert.equal(after?.separationKnown, false);
+    assert.equal(after?.separationM, null);
+    assert.equal(after?.outOfRange, false);
+    transport.emit({ type: "live", counter: null, text: null, hex: "", gps: { fix: true, lat: 42.28, lon: -83.74 } });
+    assert.equal(client.getState().followers[0]?.separationKnown, true);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "",
+      followerGps: { id: 0xa3, fix: false, lat: null, lon: null },
+    });
+    assert.equal(client.getState().followers[0]?.separationKnown, false);
+    await client.disconnect();
+  });
 });

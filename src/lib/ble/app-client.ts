@@ -1,5 +1,11 @@
 import { haversineMeters, isOutOfRange } from "../geo";
-import { BROADCAST_ID, DEFAULT_THRESHOLD_M } from "./constants";
+import {
+  BROADCAST_ID,
+  CHECK_IN_TIMEOUT_MS,
+  DEFAULT_SILENCE_S,
+  DEFAULT_THRESHOLD_M,
+  clampSilence,
+} from "./constants";
 import { createTransport, type LinkMode } from "./create-transport";
 import { isFollowerOkSignal } from "./live-link";
 import { clampThreshold } from "./protocol";
@@ -69,6 +75,19 @@ export interface ActivityEntry {
   message?: string;
 }
 
+export type CheckInStatus = "sending" | "waiting" | "ok" | "noAnswer" | "failed";
+
+/** The latest CHECK IN sent to one board. */
+export interface FollowerCheckIn {
+  status: CheckInStatus;
+  sentAt: number;
+  /** Meshtastic packet id, once the leader queued it. */
+  packetId: number | null;
+  answeredAt: number | null;
+  /** Why it failed, for No answer and failed. */
+  reason: string | null;
+}
+
 /** One of the other boards, tracked by the leader the phone is connected to. */
 export interface TrackedFollower {
   id: number;
@@ -80,6 +99,13 @@ export interface TrackedFollower {
   separationKnown: boolean | null;
   separationM: number | null;
   outOfRange: boolean;
+  /** When the leader last heard anything from this board. */
+  lastHeardAt: number | null;
+  /** When the shown position was taken. */
+  positionAt: number | null;
+  /** Not heard for longer than silenceSeconds. Its distance is stale. */
+  silent: boolean;
+  checkIn: FollowerCheckIn | null;
 }
 
 /** What the flashed ESP32 sketch is sending right now. */
@@ -97,6 +123,10 @@ export interface AppState {
   deviceName: string | null;
   leaderBatteryPercent: number | null;
   thresholdMeters: number;
+  /** Flag a follower that has been silent this long. */
+  silenceSeconds: number;
+  /** When this link came up. Silence counts from here for a board never heard. */
+  connectedAt: number | null;
   members: MemberState[];
   alerts: ActiveAlert[];
   activity: ActivityEntry[];
@@ -114,6 +144,8 @@ export interface AppState {
   gpsFix: boolean | null;
   gpsLat: number | null;
   gpsLon: number | null;
+  /** When the leader's position was taken. */
+  gpsAt: number | null;
   /** The other boards. Empty until the leader hears one. */
   followers: TrackedFollower[];
   /** Mirrors followers[0] so a single-follower reading still has one distance. */
@@ -126,7 +158,10 @@ export interface AppState {
   outOfRange: boolean;
 }
 
-export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppState {
+export function createInitialState(
+  thresholdMeters = DEFAULT_THRESHOLD_M,
+  silenceSeconds = DEFAULT_SILENCE_S,
+): AppState {
   return {
     mode: "idle",
     connection: "disconnected",
@@ -134,6 +169,8 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
     deviceName: null,
     leaderBatteryPercent: null,
     thresholdMeters: clampThreshold(thresholdMeters),
+    silenceSeconds: clampSilence(silenceSeconds),
+    connectedAt: null,
     members: [],
     alerts: [],
     activity: [],
@@ -146,6 +183,7 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
     gpsFix: null,
     gpsLat: null,
     gpsLon: null,
+    gpsAt: null,
     followers: [],
     separationKnown: null,
     separationM: null,
@@ -156,24 +194,67 @@ export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppSt
   };
 }
 
-function projectFollowers(state: AppState, followers: TrackedFollower[]): AppState {
-  const primary = followers[0] ?? null;
+function projectFollowers(state: AppState, followers: TrackedFollower[], now: number): AppState {
+  const marked = markSilence(followers, now, state.silenceSeconds, state.connectedAt);
+  const primary = marked[0] ?? null;
   return {
     ...state,
-    followers,
+    followers: marked,
     followerFix: primary?.fix ?? null,
     followerLat: primary?.lat ?? null,
     followerLon: primary?.lon ?? null,
     separationKnown: primary?.separationKnown ?? null,
     separationM: primary?.separationM ?? null,
-    outOfRange: followers.some((follower) => follower.outOfRange),
+    outOfRange: marked.some((follower) => follower.outOfRange),
   };
+}
+
+/** Flag each follower the leader has not heard from within the silence limit. */
+function markSilence(
+  followers: TrackedFollower[],
+  now: number,
+  silenceSeconds: number,
+  connectedAt: number | null,
+): TrackedFollower[] {
+  return followers.map((follower) => {
+    const since = follower.lastHeardAt ?? connectedAt;
+    const silent = since != null && now - since > silenceSeconds * 1000;
+    return silent === follower.silent ? follower : { ...follower, silent };
+  });
+}
+
+/** Turn a check-in that has waited too long into No answer. */
+function expireCheckIns(followers: TrackedFollower[], now: number): TrackedFollower[] {
+  return followers.map((follower) => {
+    const checkIn = follower.checkIn;
+    if (!checkIn || (checkIn.status !== "sending" && checkIn.status !== "waiting")) return follower;
+    if (now - checkIn.sentAt <= CHECK_IN_TIMEOUT_MS) return follower;
+    return { ...follower, checkIn: { ...checkIn, status: "noAnswer", reason: "No answer" } };
+  });
+}
+
+function patchCheckIn(
+  followers: TrackedFollower[],
+  id: number,
+  update: (checkIn: FollowerCheckIn) => FollowerCheckIn | null,
+): TrackedFollower[] {
+  return followers.map((follower) => {
+    if (follower.id !== id || !follower.checkIn) return follower;
+    const next = update(follower.checkIn);
+    return next ? { ...follower, checkIn: next } : follower;
+  });
+}
+
+function latest(a: number | null, b: number | null | undefined): number | null {
+  if (b == null) return a;
+  if (a == null) return b;
+  return Math.max(a, b);
 }
 
 function upsertTracked(
   followers: TrackedFollower[],
   id: number,
-  patch: Partial<Omit<TrackedFollower, "id" | "outOfRange">>,
+  patch: Partial<Omit<TrackedFollower, "id" | "outOfRange" | "silent">>,
   thresholdMeters: number,
 ): TrackedFollower[] {
   const previous = followers.find((follower) => follower.id === id);
@@ -187,6 +268,10 @@ function upsertTracked(
       patch.separationKnown !== undefined ? patch.separationKnown : (previous?.separationKnown ?? null),
     separationM: patch.separationM !== undefined ? patch.separationM : (previous?.separationM ?? null),
     outOfRange: false,
+    lastHeardAt: latest(previous?.lastHeardAt ?? null, patch.lastHeardAt),
+    positionAt: patch.positionAt !== undefined ? patch.positionAt : (previous?.positionAt ?? null),
+    silent: previous?.silent ?? false,
+    checkIn: patch.checkIn !== undefined ? patch.checkIn : (previous?.checkIn ?? null),
   };
   next.outOfRange = isOutOfRange(next.separationKnown, next.separationM, thresholdMeters);
   return [...followers.filter((follower) => follower.id !== id), next].sort((a, b) => a.id - b.id);
@@ -200,8 +285,12 @@ function fillDistance(
   gpsLon: number | null,
   thresholdMeters: number,
 ): TrackedFollower[] {
-  if (gpsFix !== true || gpsLat == null || gpsLon == null) return followers;
   return followers.map((follower) => {
+    // A lost fix on either end makes the last distance meaningless. Do not keep showing it.
+    if (gpsFix === false || follower.fix === false) {
+      return { ...follower, separationKnown: false, separationM: null, outOfRange: false };
+    }
+    if (gpsFix !== true || gpsLat == null || gpsLon == null) return follower;
     if (follower.fix !== true || follower.lat == null || follower.lon == null) return follower;
     const meters = haversineMeters(gpsLat, gpsLon, follower.lat, follower.lon);
     return {
@@ -222,9 +311,16 @@ export class ExcursionAppClient {
   private unsubscribe: (() => void) | null = null;
   private listeners = new Set<(state: AppState) => void>();
   private closing = false;
+  private ticker: ReturnType<typeof setInterval> | null = null;
+  private readonly now: () => number;
 
-  constructor(initial?: { thresholdMeters?: number }) {
-    this.state = createInitialState(initial?.thresholdMeters);
+  constructor(initial?: { thresholdMeters?: number; silenceSeconds?: number; now?: () => number }) {
+    this.state = createInitialState(initial?.thresholdMeters, initial?.silenceSeconds);
+    this.now = initial?.now ?? Date.now;
+  }
+
+  private fresh(): AppState {
+    return createInitialState(this.state.thresholdMeters, this.state.silenceSeconds);
   }
 
   /** Appendix C: update_ui — the dashboard subscribes instead of polling. */
@@ -302,7 +398,7 @@ export class ExcursionAppClient {
       void this.parseData(event);
     });
     this.commit({
-      ...createInitialState(this.state.thresholdMeters),
+      ...this.fresh(),
       mode,
       connection: "scanning",
       thresholdMeters: this.state.thresholdMeters,
@@ -317,7 +413,7 @@ export class ExcursionAppClient {
       this.release();
       void failed?.disconnect();
       this.commit({
-        ...createInitialState(this.state.thresholdMeters),
+        ...this.fresh(),
         connection: "error",
         error: message,
         thresholdMeters: this.state.thresholdMeters,
@@ -330,13 +426,12 @@ export class ExcursionAppClient {
     await this.stopDeviceScan();
     if (!this.transport && this.state.mode === "idle") return;
     this.closing = true;
-    const threshold = this.state.thresholdMeters;
     try {
       await this.transport?.disconnect();
     } finally {
       this.release();
       this.closing = false;
-      this.commit(createInitialState(threshold));
+      this.commit(this.fresh());
     }
   }
 
@@ -347,7 +442,25 @@ export class ExcursionAppClient {
       ...follower,
       outOfRange: isOutOfRange(follower.separationKnown, follower.separationM, thresholdMeters),
     }));
-    this.commit(projectFollowers({ ...this.state, thresholdMeters }, followers));
+    this.commit(projectFollowers({ ...this.state, thresholdMeters }, followers, this.now()));
+  }
+
+  /** How long a follower may stay silent before it is flagged. */
+  setSilenceSeconds(seconds: number): void {
+    const silenceSeconds = clampSilence(seconds);
+    this.commit(projectFollowers({ ...this.state, silenceSeconds }, this.state.followers, this.now()));
+  }
+
+  /**
+   * Re-check silence and check-in timeouts. Runs every few seconds while connected.
+   * Tests call it directly with their own clock.
+   */
+  tick(): void {
+    if (this.state.connection !== "connected" && this.state.connection !== "reconnecting") return;
+    const now = this.now();
+    const next = projectFollowers(this.state, expireCheckIns(this.state.followers, now), now);
+    const changed = next.followers.some((follower, index) => follower !== this.state.followers[index]);
+    if (changed) this.commit(next);
   }
 
   async writeThreshold(): Promise<void> {
@@ -361,21 +474,81 @@ export class ExcursionAppClient {
       });
       this.commit(this.state, {
         id: nextId(),
-        at: Date.now(),
+        at: this.now(),
         kind: "threshold",
         meters,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not set the separation line.";
-      this.commit({ ...this.state, error: message }, { id: nextId(), at: Date.now(), kind: "error", message });
+      this.commit({ ...this.state, error: message }, { id: nextId(), at: this.now(), kind: "error", message });
     }
   }
 
-  /** Appendix C: send_check_in. The Heltec leader treats this as the whole group. */
+  /**
+   * CHECK IN to one follower, or to every follower for BROADCAST_ID.
+   * Each board's answer is tracked on its own card.
+   */
   async sendCheckIn(targetId: number): Promise<void> {
     if (!this.transport || this.state.connection !== "connected") {
       throw new Error("Connect the beacon before sending a check-in.");
     }
+    const targets =
+      targetId === BROADCAST_ID
+        ? this.state.followers.map((follower) => follower.id)
+        : this.state.followers.some((follower) => follower.id === targetId)
+          ? [targetId]
+          : [];
+    if (targets.length > 0) {
+      await this.sendTrackedCheckIns(targets);
+      return;
+    }
+    await this.sendGroupCheckIn(targetId);
+  }
+
+  private async sendTrackedCheckIns(targets: number[]): Promise<void> {
+    const transport = this.transport;
+    if (!transport) return;
+    const sentAt = this.now();
+    let followers = this.state.followers;
+    for (const id of targets) {
+      followers = upsertTracked(
+        followers,
+        id,
+        { checkIn: { status: "sending", sentAt, packetId: null, answeredAt: null, reason: null } },
+        this.state.thresholdMeters,
+      );
+    }
+    this.commit(projectFollowers({ ...this.state, error: null }, followers, sentAt), {
+      id: nextId(),
+      at: sentAt,
+      kind: "checkin",
+      ...(targets.length === 1 ? { deviceId: targets[0] } : {}),
+    });
+
+    let firstError: Error | null = null;
+    for (const id of targets) {
+      try {
+        await transport.writeCommand({ type: CmdType.CHECK_IN, targetId: id, thresholdMeters: 0 });
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error("Check-in did not reach the beacon.");
+        firstError ??= failure;
+        this.commit(
+          projectFollowers(
+            this.state,
+            patchCheckIn(this.state.followers, id, (checkIn) =>
+              checkIn.sentAt === sentAt ? { ...checkIn, status: "failed", reason: failure.message } : null,
+            ),
+            this.now(),
+          ),
+        );
+      }
+    }
+    if (firstError && targets.length === 1) throw firstError;
+  }
+
+  /** The old firmware's single group check-in, used when no follower is tracked yet. */
+  private async sendGroupCheckIn(targetId: number): Promise<void> {
+    if (!this.transport) return;
     try {
       await this.transport.writeCommand({
         type: CmdType.CHECK_IN,
@@ -386,11 +559,11 @@ export class ExcursionAppClient {
       const message = error instanceof Error ? error.message : "Check-in did not reach the beacon.";
       this.commit(
         { ...this.state, error: message },
-        { id: nextId(), at: Date.now(), kind: "error", message },
+        { id: nextId(), at: this.now(), kind: "error", message },
       );
       throw error instanceof Error ? error : new Error(message);
     }
-    const now = Date.now();
+    const now = this.now();
     this.commit(
       { ...this.state, groupCheckInAt: now, groupOkAt: null, groupOkId: null, okIds: [], error: null },
       { id: nextId(), at: now, kind: "checkin" },
@@ -407,14 +580,16 @@ export class ExcursionAppClient {
             connection: "connected",
             error: null,
             deviceName: event.deviceName,
+            connectedAt: this.state.connectedAt ?? this.now(),
           },
           {
             id: nextId(),
-            at: Date.now(),
+            at: this.now(),
             kind: "linked",
             message: event.deviceName,
           },
         );
+        this.startTicker();
         return;
       case "disconnected":
         if (this.closing || !event.unexpected) return;
@@ -430,14 +605,14 @@ export class ExcursionAppClient {
       case "error":
         this.commit(
           { ...this.state, error: event.message },
-          { id: nextId(), at: Date.now(), kind: "error", message: event.message },
+          { id: nextId(), at: this.now(), kind: "error", message: event.message },
         );
         return;
       case "leader":
         this.commit({
           ...this.state,
           leaderBatteryPercent: event.batteryPercent,
-          lastPacketAt: Date.now(),
+          lastPacketAt: this.now(),
         });
         return;
       case "follower":
@@ -446,14 +621,51 @@ export class ExcursionAppClient {
       case "alert":
         this.triggerAlert(event.deviceId, event.status);
         return;
+      case "heard": {
+        if (!this.state.followers.some((follower) => follower.id === event.id)) return;
+        const followers = this.state.followers.map((follower) =>
+          follower.id === event.id
+            ? { ...follower, lastHeardAt: latest(follower.lastHeardAt, Math.min(event.at, this.now())) }
+            : follower,
+        );
+        this.commit(projectFollowers({ ...this.state, lastPacketAt: this.now() }, followers, this.now()));
+        return;
+      }
+      case "checkin-sent":
+        this.commit(
+          projectFollowers(
+            this.state,
+            patchCheckIn(this.state.followers, event.id, (checkIn) =>
+              checkIn.status === "sending" ? { ...checkIn, status: "waiting", packetId: event.packetId } : null,
+            ),
+            this.now(),
+          ),
+        );
+        return;
+      case "checkin-ack":
+        this.answerCheckIn(event.id, event.packetId);
+        return;
+      case "checkin-failed":
+        this.commit(
+          projectFollowers(
+            this.state,
+            patchCheckIn(this.state.followers, event.id, (checkIn) =>
+              checkIn.packetId === event.packetId && checkIn.status !== "ok"
+                ? { ...checkIn, status: event.noAnswer ? "noAnswer" : "failed", reason: event.reason }
+                : null,
+            ),
+            this.now(),
+          ),
+        );
+        return;
       case "roster-cleared":
         this.commit(
           { ...this.state, members: [], alerts: [] },
-          { id: nextId(), at: Date.now(), kind: "cleared" },
+          { id: nextId(), at: this.now(), kind: "cleared" },
         );
         return;
       case "live": {
-        const now = Date.now();
+        const now = this.now();
         const followerOk = isFollowerOkSignal(event.text);
         const gps = event.gps;
         let followers = this.state.followers;
@@ -469,6 +681,10 @@ export class ExcursionAppClient {
               lat: event.followerGps.lat,
               lon: event.followerGps.lon,
               ...(event.followerGps.name ? { name: event.followerGps.name } : {}),
+              ...(event.followerGps.heardAt != null ? { lastHeardAt: event.followerGps.heardAt } : {}),
+              ...(event.followerGps.positionAt !== undefined
+                ? { positionAt: event.followerGps.positionAt }
+                : {}),
             },
             this.state.thresholdMeters,
           );
@@ -487,6 +703,7 @@ export class ExcursionAppClient {
         const gpsFix = gps ? gps.fix : this.state.gpsFix;
         const gpsLat = gps ? gps.lat : this.state.gpsLat;
         const gpsLon = gps ? gps.lon : this.state.gpsLon;
+        const gpsAt = gps ? (gps.at ?? (gps.fix ? now : null)) : this.state.gpsAt;
         followers = fillDistance(followers, gpsFix, gpsLat, gpsLon, this.state.thresholdMeters);
         this.commit(
           projectFollowers(
@@ -502,6 +719,7 @@ export class ExcursionAppClient {
               gpsFix,
               gpsLat,
               gpsLon,
+              gpsAt,
               liveLink: {
                 counter: event.counter ?? this.state.liveLink?.counter ?? null,
                 text: event.text ?? this.state.liveLink?.text ?? null,
@@ -510,9 +728,12 @@ export class ExcursionAppClient {
               },
             },
             followers,
+            now,
           ),
           followerOk ? { id: nextId(), at: now, kind: "answered" } : undefined,
         );
+        // An OK text from a board counts as its answer, but only to a check-in still open.
+        if (followerOk && event.okId != null) this.answerCheckIn(event.okId, null);
         return;
       }
       default:
@@ -530,7 +751,7 @@ export class ExcursionAppClient {
     if (status !== Status.NEED_HELP && status !== Status.OUT_OF_RANGE) return;
     const existing = this.state.alerts.find((alert) => alert.deviceId === deviceId);
     if (existing?.status === status) return;
-    const at = Date.now();
+    const at = this.now();
     const alerts: ActiveAlert[] = [
       ...this.state.alerts.filter((alert) => alert.deviceId !== deviceId),
       { deviceId, status, at },
@@ -546,13 +767,36 @@ export class ExcursionAppClient {
     );
   }
 
+  /** Mark a board's open check-in OK. A null packet id matches any open check-in. */
+  private answerCheckIn(id: number, packetId: number | null): void {
+    const now = this.now();
+    const target = this.state.followers.find((follower) => follower.id === id);
+    const checkIn = target?.checkIn;
+    // A real acknowledgement or OK reply still counts after No answer was shown.
+    if (!checkIn || checkIn.status === "ok") return;
+    if (packetId != null && checkIn.packetId !== packetId) return;
+    this.commit(
+      projectFollowers(
+        this.state,
+        patchCheckIn(this.state.followers, id, (current) => ({
+          ...current,
+          status: "ok",
+          answeredAt: now,
+          reason: null,
+        })),
+        now,
+      ),
+      { id: nextId(), at: now, kind: "answered", deviceId: id },
+    );
+  }
+
   dismissError(): void {
     if (!this.state.error) return;
     this.commit({ ...this.state, error: null });
   }
 
   private upsertFollower(info: FollowerInfo, lab: LabSample | null): void {
-    const now = Date.now();
+    const now = this.now();
     const previous = this.state.members.find((member) => member.deviceId === info.deviceId);
     const pendingSince =
       info.status === Status.CHECKIN_PENDING
@@ -611,7 +855,15 @@ export class ExcursionAppClient {
     }
   }
 
+  private startTicker(): void {
+    if (this.ticker) return;
+    this.ticker = setInterval(() => this.tick(), 5000);
+    (this.ticker as { unref?: () => void }).unref?.();
+  }
+
   private release(): void {
+    if (this.ticker) clearInterval(this.ticker);
+    this.ticker = null;
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.transport = null;

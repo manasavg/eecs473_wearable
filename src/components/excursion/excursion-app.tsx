@@ -1,27 +1,60 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { BROADCAST_ID, THRESHOLD_MAX_M, THRESHOLD_MIN_M } from "@/lib/ble/constants";
-import type { TrackedFollower } from "@/lib/ble/app-client";
+import {
+  BROADCAST_ID,
+  SILENCE_MAX_S,
+  SILENCE_MIN_S,
+  THRESHOLD_MAX_M,
+  THRESHOLD_MIN_M,
+} from "@/lib/ble/constants";
+import type { CheckInStatus, TrackedFollower } from "@/lib/ble/app-client";
 import { isNativeShell } from "@/lib/ble/create-transport";
 import { webBluetoothAvailable } from "@/lib/ble/web-bluetooth-transport";
 import { bearingDegrees, cardinalLabel, guideCue, relativeBearing } from "@/lib/geo";
 import { boardLabel, formatGpsDegrees, formatSeparation } from "@/lib/format";
-import { ensureNotifyPermission, notifyOutOfRange } from "@/lib/notify";
+import {
+  ensureNotifyPermission,
+  formatDuration,
+  notifyNoAnswer,
+  notifyOutOfRange,
+  notifySilent,
+} from "@/lib/notify";
 import { useCompass } from "./use-compass";
 import { useExcursion } from "./use-excursion";
+
+function followerLabel(follower: TrackedFollower): string {
+  return follower.name || boardLabel(follower.id);
+}
+
+/** Re-render every few seconds so "heard 40 s ago" stays current. */
+function useNow(intervalMs = 5000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
+  return now;
+}
+
+function ago(at: number | null, now: number): string {
+  if (at == null) return "never";
+  return `${formatDuration((now - at) / 1000)} ago`;
+}
 
 export function ExcursionApp() {
   const app = useExcursion();
   const { state } = app;
   const compass = useCompass();
+  const now = useNow();
   const linked = state.connection === "connected";
   const onLink = state.mode !== "idle";
   const [ble, setBle] = useState<boolean | null>(null);
   const [nativeShell, setNativeShell] = useState(false);
   const [rangeDraft, setRangeDraft] = useState(String(state.thresholdMeters));
+  const [silenceDraft, setSilenceDraft] = useState(String(state.silenceSeconds));
   const [looked, setLooked] = useState(false);
-  const wasOut = useRef<Record<number, boolean>>({});
+  const seen = useRef<Record<number, { out: boolean; silent: boolean; checkIn: CheckInStatus | null }>>({});
 
   useEffect(() => {
     const native = isNativeShell();
@@ -34,31 +67,51 @@ export function ExcursionApp() {
   }, [state.thresholdMeters]);
 
   useEffect(() => {
-    const next: Record<number, boolean> = {};
-    for (const follower of state.followers) {
-      const previous = wasOut.current[follower.id] ?? false;
-      if (follower.outOfRange && !previous && follower.separationM != null) {
-        void notifyOutOfRange(follower.separationM, state.thresholdMeters, boardLabel(follower.id));
-      }
-      next[follower.id] = follower.outOfRange;
-    }
-    wasOut.current = next;
-  }, [state.followers, state.thresholdMeters]);
+    setSilenceDraft(String(state.silenceSeconds));
+  }, [state.silenceSeconds]);
 
-  const okNames = state.okIds.map((id) => {
-    const follower = state.followers.find((item) => item.id === id);
-    return follower?.name || boardLabel(id);
-  });
-  const checkInLabel = state.groupOkAt
-    ? okNames.length > 0
-      ? `${okNames.join(" and ")} OK`
-      : state.groupOkId != null
-        ? `${boardLabel(state.groupOkId)} is OK`
-        : "They're OK"
-    : state.groupCheckInAt
-      ? "Waiting for the other boards"
-      : "Not sent";
-  const outFollowers = state.followers.filter((follower) => follower.outOfRange);
+  // Notify once each time a follower goes out of range, goes silent, or misses a check-in.
+  useEffect(() => {
+    const next: typeof seen.current = {};
+    for (const follower of state.followers) {
+      const previous = seen.current[follower.id];
+      const who = followerLabel(follower);
+      const checkIn = follower.checkIn?.status ?? null;
+      if (previous) {
+        if (follower.outOfRange && !previous.out && follower.separationM != null) {
+          void notifyOutOfRange(follower.separationM, state.thresholdMeters, who);
+        }
+        if (follower.silent && !previous.silent) {
+          void notifySilent(who, state.silenceSeconds);
+        }
+        if ((checkIn === "noAnswer" || checkIn === "failed") && previous.checkIn !== checkIn) {
+          void notifyNoAnswer(who, follower.checkIn?.reason ?? "No answer");
+        }
+      }
+      // A board first seen while already silent does not page. Its card still shows it.
+      next[follower.id] = { out: follower.outOfRange, silent: follower.silent, checkIn };
+    }
+    seen.current = next;
+  }, [state.followers, state.thresholdMeters, state.silenceSeconds]);
+
+  const followers = state.followers;
+  const outFollowers = followers.filter((follower) => follower.outOfRange && !follower.silent);
+  const silentFollowers = followers.filter((follower) => follower.silent);
+  const asked = followers.filter((follower) => follower.checkIn);
+  const answered = asked.filter((follower) => follower.checkIn?.status === "ok");
+  const missed = asked.filter(
+    (follower) => follower.checkIn?.status === "noAnswer" || follower.checkIn?.status === "failed",
+  );
+  const checkInSummary =
+    asked.length === 0
+      ? "Not sent"
+      : answered.length === asked.length
+        ? asked.length === 1
+          ? `${followerLabel(answered[0])} is OK`
+          : `All ${asked.length} OK`
+        : missed.length > 0
+          ? `${answered.length} of ${asked.length} OK · ${missed.length} no answer`
+          : `${answered.length} of ${asked.length} OK · waiting`;
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-4 py-6">
@@ -67,8 +120,8 @@ export function ExcursionApp() {
       {!onLink ? (
         <div className="mt-6 flex flex-col gap-4">
           <p className="text-sm text-neutral-600">
-            Three Meshtastic boards. Pick any one. That board is the leader, and it reports the other two.
-            Disconnect and pick a different board to swap.
+            Meshtastic boards on the same channel. Pick any one. That board is the leader, and it reports
+            every other board it hears. Disconnect and pick a different board to swap.
           </p>
           {(state.error || app.scanError) && (
             <p className="text-sm text-red-700" role="alert">
@@ -83,6 +136,7 @@ export function ExcursionApp() {
                 disabled={ble === false || app.busy || app.scanning}
                 onClick={() => {
                   setLooked(true);
+                  void ensureNotifyPermission();
                   void app.lookForDevices();
                 }}
               >
@@ -112,7 +166,7 @@ export function ExcursionApp() {
               )}
               {looked && !app.scanning && app.peers.length === 0 && !app.scanError && (
                 <p className="text-sm text-neutral-600">
-                  No Meshtastic boards in range. Power all three on, then look again.
+                  No Meshtastic boards in range. Power the boards on, then look again.
                 </p>
               )}
             </>
@@ -121,7 +175,10 @@ export function ExcursionApp() {
               type="button"
               className="h-11 border border-black bg-black text-white disabled:opacity-40"
               disabled={ble === false || app.busy}
-              onClick={() => void app.connectBeacon(false)}
+              onClick={() => {
+                void ensureNotifyPermission();
+                void app.connectBeacon(false);
+              }}
             >
               {app.busy ? "Connecting" : "Connect"}
             </button>
@@ -146,11 +203,16 @@ export function ExcursionApp() {
         </div>
       ) : (
         <div className="mt-6 flex flex-col gap-6">
-          {outFollowers.length > 0 && (
+          {(silentFollowers.length > 0 || outFollowers.length > 0) && (
             <div className="border border-red-700 bg-red-50 px-3 py-3 text-sm text-red-800" role="alert">
+              {silentFollowers.map((follower) => (
+                <p key={`silent-${follower.id}`}>
+                  Lost contact with {followerLabel(follower)} · last heard {ago(follower.lastHeardAt, now)}.
+                </p>
+              ))}
               {outFollowers.map((follower) => (
-                <p key={follower.id}>
-                  {boardLabel(follower.id)} is out of range
+                <p key={`out-${follower.id}`}>
+                  {followerLabel(follower)} is out of range
                   {follower.separationM != null ? ` · ${formatSeparation(follower.separationM)}` : ""}. Limit{" "}
                   {state.thresholdMeters} m.
                 </p>
@@ -167,9 +229,6 @@ export function ExcursionApp() {
                   : "Disconnected"}
             {state.deviceName ? ` · ${state.deviceName}` : ""}
           </p>
-          <p className="text-sm text-neutral-600">
-            This board is using the app. The other two are followers. Disconnect to choose a different leader.
-          </p>
           {state.error && (
             <p className="text-sm text-red-700" role="alert">
               {state.error}{" "}
@@ -181,31 +240,31 @@ export function ExcursionApp() {
 
           <section>
             <h2 className="text-sm font-medium">Check-in</h2>
-            <p className="mt-2 text-2xl">{checkInLabel}</p>
+            <p className="mt-2 text-2xl">{checkInSummary}</p>
             <button
               type="button"
               className="mt-3 h-11 w-full border border-black bg-black text-white disabled:opacity-40"
-              disabled={!linked || app.busy}
+              disabled={!linked || followers.length === 0}
               onClick={() => void app.checkIn(BROADCAST_ID)}
             >
-              Check in
+              {followers.length > 1 ? `Check in all ${followers.length}` : "Check in"}
             </button>
             <p className="mt-2 text-sm text-neutral-600">
-              Sends CHECK IN to each other board. A board shows OK when it confirms it got the message. An OK text counts too.
+              Sends CHECK IN to each follower. To ask one board, use the button on its card. A board shows OK
+              when it confirms it got the message, or when it replies OK.
             </p>
-            {state.liveLink?.counter != null && (
-              <p className="mt-2 text-sm text-neutral-500">Link counter {state.liveLink.counter}</p>
-            )}
           </section>
 
           <section className="border-t border-neutral-200 pt-6">
-            <h2 className="text-sm font-medium">Followers</h2>
+            <h2 className="text-sm font-medium">
+              Followers{followers.length > 0 ? ` (${followers.length})` : ""}
+            </h2>
             <p className="mt-2 text-sm text-neutral-600">
-              {state.followers.length === 0
-                ? "Waiting for the other two boards. They show up when this radio hears them. Nodes from the public internet are left out."
-                : "The other boards this radio has heard. Both GPS antennas need a view of the sky."}
+              {followers.length === 0
+                ? "Waiting for the other boards. They show up when this radio hears them. Nodes from the public internet are left out."
+                : "Every board this radio has heard. GPS antennas need a view of the sky."}
             </p>
-            {(compass.needsGesture || compass.heading == null) && (
+            {followers.length > 0 && (compass.needsGesture || compass.heading == null) && (
               <button
                 type="button"
                 className="mt-3 h-11 w-full border border-black bg-white"
@@ -220,11 +279,13 @@ export function ExcursionApp() {
               </p>
             )}
             <div className="mt-4 flex flex-col gap-4">
-              {state.followers.map((follower) => (
+              {followers.map((follower) => (
                 <FollowerCard
                   key={follower.id}
-                  ok={state.okIds.includes(follower.id)}
                   follower={follower}
+                  now={now}
+                  linked={linked}
+                  onCheckIn={() => void app.checkIn(follower.id)}
                   leaderFix={state.gpsFix}
                   leaderLat={state.gpsLat}
                   leaderLon={state.gpsLon}
@@ -235,42 +296,54 @@ export function ExcursionApp() {
           </section>
 
           <section className="border-t border-neutral-200 pt-6">
-            <h2 className="text-sm font-medium">Range</h2>
+            <h2 className="text-sm font-medium">Alerts</h2>
             <form
-              className="mt-3 flex flex-wrap items-center gap-2"
+              className="mt-3 flex flex-col gap-3"
               onSubmit={(event) => {
                 event.preventDefault();
                 const meters = Number.parseInt(rangeDraft, 10);
-                if (!Number.isFinite(meters)) return;
-                void (async () => {
-                  await ensureNotifyPermission();
-                  await app.setRange(meters);
-                })();
+                const seconds = Number.parseInt(silenceDraft, 10);
+                if (!Number.isFinite(meters) || !Number.isFinite(seconds)) return;
+                void ensureNotifyPermission();
+                app.saveLimits(meters, seconds);
               }}
             >
-              <input
-                type="number"
-                inputMode="numeric"
-                min={THRESHOLD_MIN_M}
-                max={THRESHOLD_MAX_M}
-                step={1}
-                value={rangeDraft}
-                aria-label="Out of range distance in meters"
-                className="h-11 w-28 border border-neutral-300 px-3 tabular-nums"
-                onChange={(event) => setRangeDraft(event.target.value)}
-              />
-              <span className="text-sm text-neutral-600">meters</span>
-              <button
-                type="submit"
-                className="h-11 border border-black bg-black px-4 text-white disabled:opacity-40"
-                disabled={!linked || app.busy}
-              >
-                Set
+              <label className="flex items-center gap-2">
+                <span className="w-32 text-sm text-neutral-600">Out of range past</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={THRESHOLD_MIN_M}
+                  max={THRESHOLD_MAX_M}
+                  step={1}
+                  value={rangeDraft}
+                  className="h-11 w-24 border border-neutral-300 px-3 tabular-nums"
+                  onChange={(event) => setRangeDraft(event.target.value)}
+                />
+                <span className="text-sm text-neutral-600">m</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <span className="w-32 text-sm text-neutral-600">Lost contact after</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={SILENCE_MIN_S}
+                  max={SILENCE_MAX_S}
+                  step={1}
+                  value={silenceDraft}
+                  className="h-11 w-24 border border-neutral-300 px-3 tabular-nums"
+                  onChange={(event) => setSilenceDraft(event.target.value)}
+                />
+                <span className="text-sm text-neutral-600">s</span>
+              </label>
+              <button type="submit" className="h-11 border border-black bg-black px-4 text-white">
+                Save
               </button>
             </form>
             <p className="mt-2 text-sm text-neutral-600">
-              Whole meters, from {THRESHOLD_MIN_M} to {THRESHOLD_MAX_M}. Past this, that follower light
-              stays on and this phone notifies you.
+              Range {THRESHOLD_MIN_M}–{THRESHOLD_MAX_M} m. Lost contact {SILENCE_MIN_S}–{SILENCE_MAX_S} s. Set
+              each board to send its position more often than the lost-contact time, or it will be flagged
+              between reports. Both are saved on this phone.
             </p>
           </section>
 
@@ -282,6 +355,9 @@ export function ExcursionApp() {
                 <p className="text-2xl tabular-nums">{formatGpsDegrees(state.gpsLat)}</p>
                 <p className="mt-2 text-sm text-neutral-600">Longitude</p>
                 <p className="text-2xl tabular-nums">{formatGpsDegrees(state.gpsLon)}</p>
+                {state.gpsAt != null && (
+                  <p className="mt-2 text-sm text-neutral-600">Position from {ago(state.gpsAt, now)}</p>
+                )}
               </div>
             ) : (
               <p className="mt-2 text-4xl">{state.gpsFix === false ? "No fix" : "—"}</p>
@@ -302,16 +378,37 @@ export function ExcursionApp() {
   );
 }
 
+function checkInText(follower: TrackedFollower, now: number): string {
+  const checkIn = follower.checkIn;
+  if (!checkIn) return "Not checked in";
+  switch (checkIn.status) {
+    case "sending":
+      return "Sending…";
+    case "waiting":
+      return `Waiting · sent ${ago(checkIn.sentAt, now)}`;
+    case "ok":
+      return `OK · ${ago(checkIn.answeredAt, now)}`;
+    case "noAnswer":
+      return `No answer · sent ${ago(checkIn.sentAt, now)}`;
+    case "failed":
+      return `Not delivered · ${checkIn.reason ?? "unknown error"}`;
+  }
+}
+
 function FollowerCard({
   follower,
-  ok,
+  now,
+  linked,
+  onCheckIn,
   leaderFix,
   leaderLat,
   leaderLon,
   heading,
 }: {
   follower: TrackedFollower;
-  ok: boolean;
+  now: number;
+  linked: boolean;
+  onCheckIn: () => void;
   leaderFix: boolean | null;
   leaderLat: number | null;
   leaderLon: number | null;
@@ -328,21 +425,29 @@ function FollowerCard({
     followerLon != null;
   const bearing = ready ? bearingDegrees(leaderLat, leaderLon, followerLat, followerLon) : null;
   const arrow = bearing == null ? null : heading == null ? bearing : relativeBearing(bearing, heading);
-  const label = follower.name || boardLabel(follower.id);
+  const label = followerLabel(follower);
+  const alarm = follower.outOfRange || follower.silent;
+  const status = follower.checkIn?.status;
+  const busy = status === "sending" || status === "waiting";
 
   return (
-    <article className={`border px-3 py-3 ${follower.outOfRange ? "border-red-700" : "border-neutral-200"}`}>
-      <h3 className="text-sm font-medium">
-        {label}
-        {ok ? " · OK" : ""}
-      </h3>
-      <p className="mt-2 text-3xl tabular-nums">
+    <article className={`border px-3 py-3 ${alarm ? "border-red-700" : "border-neutral-200"}`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <h3 className="text-sm font-medium">{label}</h3>
+        <p className={`text-sm ${follower.silent ? "text-red-700" : "text-neutral-600"}`}>
+          {follower.silent ? "Lost contact · " : ""}heard {ago(follower.lastHeardAt, now)}
+        </p>
+      </div>
+      <p className={`mt-2 text-3xl tabular-nums ${follower.silent ? "text-neutral-400" : ""}`}>
         {follower.separationKnown === true
           ? formatSeparation(follower.separationM)
           : follower.separationKnown === false
             ? "No fix"
             : "—"}
       </p>
+      {follower.silent && follower.separationKnown === true && (
+        <p className="text-sm text-neutral-600">Last known distance. The board may have moved.</p>
+      )}
       {arrow == null || bearing == null ? (
         <p className="mt-2 text-sm text-neutral-600">Waiting for a fix on this board and the leader.</p>
       ) : (
@@ -363,10 +468,32 @@ function FollowerCard({
       {follower.fix === true ? (
         <p className="mt-2 text-sm tabular-nums text-neutral-600">
           {formatGpsDegrees(follower.lat)}, {formatGpsDegrees(follower.lon)}
+          {follower.positionAt != null ? ` · ${ago(follower.positionAt, now)}` : ""}
         </p>
       ) : (
         <p className="mt-2 text-sm text-neutral-600">{follower.fix === false ? "No GPS fix" : "No position yet"}</p>
       )}
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-neutral-200 pt-3">
+        <p
+          className={`text-sm ${
+            status === "ok"
+              ? "text-green-700"
+              : status === "noAnswer" || status === "failed"
+                ? "text-red-700"
+                : "text-neutral-600"
+          }`}
+        >
+          {checkInText(follower, now)}
+        </p>
+        <button
+          type="button"
+          className="h-10 shrink-0 border border-black bg-white px-3 text-sm disabled:opacity-40"
+          disabled={!linked || busy}
+          onClick={onCheckIn}
+        >
+          Check in
+        </button>
+      </div>
     </article>
   );
 }

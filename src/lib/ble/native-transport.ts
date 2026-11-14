@@ -1,3 +1,4 @@
+import { BROADCAST_ID } from "./constants";
 import { Capacitor } from "@capacitor/core";
 import { MeshLink } from "../meshtastic/link";
 import { viewToBytes } from "./protocol";
@@ -235,7 +236,10 @@ export class NativeBleTransport implements BleTransport {
       throw new Error("The beacon is not ready for commands yet.");
     }
     if (!this.link) throw new Error("The beacon is not ready for commands yet.");
-    await this.link.sendCheckIn();
+    const targets =
+      command.targetId === BROADCAST_ID ? this.link.knownNodes() : [command.targetId];
+    if (targets.length === 0) throw new Error("The leader has not heard any other board yet.");
+    for (const target of targets) await this.link.sendCheckIn(target);
   }
 
   private async pickDevice(central: NativeCentral): Promise<NativeDevice> {

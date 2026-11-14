@@ -1,12 +1,14 @@
 # Excursion
 
-Leader phone app for three identical Heltec boards. LoRa check-in, distance and direction to each follower, and an out-of-range light plus phone notification.
+Leader phone app for identical Heltec boards: one leader and any number of followers (two boards minimum, five planned). Check-in to one board or all of them, distance and direction to each follower, and phone notifications when a follower goes out of range, goes silent, or misses a check-in.
 
-All three Heltecs run Meshtastic firmware, flashed from https://flasher.meshtastic.org/ for the matching V4 or V4-R8 board. Use the same region and channel on every board. The phone lists nodes whose name starts with `Meshtastic`. The board you tap is the leader: the app reads that node's database for the other two. Disconnect and tap a different board to swap.
+Every Heltec runs Meshtastic firmware, flashed from https://flasher.meshtastic.org/ for the matching V4 or V4-R8 board. Use the same region and a private channel on every board. The phone lists nodes whose name starts with `Meshtastic`. The board you tap is the leader: the app reads that node's database for the others. Disconnect and tap a different board to swap.
+
+Before testing, set each board's position broadcast interval below the app's lost-contact limit (120 s by default). See the board settings in `PROTOCOL.md`.
 
 The phone uses Meshtastic's own client. The Heltec V4 firmware already runs the SX1262 LoRa radio and the GPS port: GPIO 38 toward the GPS module, GPIO 39 toward the board, 9600 baud. Wire the NEO-6M there, with VCC to 5V and GND to GND. The antennas need a view of the sky.
 
-Check-in uses Meshtastic text. A board shows OK when it confirms the message. The red LED on a far board is not part of stock Meshtastic.
+Check-in uses Meshtastic text. A board shows OK when its own radio acknowledges the message or it replies OK. The red LED on a far board is not part of stock Meshtastic.
 
 ## Run
 

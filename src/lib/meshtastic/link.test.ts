@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { create, toBinary } from "@bufbuild/protobuf";
-import { Mesh } from "@meshtastic/protobufs";
+import { Mesh, Portnums } from "@meshtastic/protobufs";
 import type { BleEvent } from "../ble/transport.ts";
 import { MeshLink } from "./link.ts";
 
@@ -19,6 +19,36 @@ async function listen(): Promise<{ link: MeshLink; events: BleEvent[]; writes: U
     (event) => events.push(event),
   );
   return { link, events, writes };
+}
+
+function routing(from: number, requestId: number, errorReason: number): Uint8Array {
+  const payload = toBinary(
+    Mesh.RoutingSchema,
+    create(Mesh.RoutingSchema, { variant: { case: "errorReason", value: errorReason } }),
+  );
+  return fromRadio({
+    case: "packet",
+    value: create(Mesh.MeshPacketSchema, {
+      from,
+      to: 0x11,
+      id: 1234,
+      payloadVariant: {
+        case: "decoded",
+        value: create(Mesh.DataSchema, { portnum: Portnums.PortNum.ROUTING_APP, requestId, payload }),
+      },
+    }),
+  });
+}
+
+function nodeA3(): Uint8Array {
+  return fromRadio({
+    case: "nodeInfo",
+    value: create(Mesh.NodeInfoSchema, {
+      num: 0xa3,
+      lastHeard: Math.floor(Date.now() / 1000) - 60,
+      user: create(Mesh.UserSchema, { longName: "Follower A3", shortName: "A3" }),
+    }),
+  });
 }
 
 async function settle(): Promise<void> {
@@ -83,7 +113,7 @@ describe("MeshLink", () => {
 
   it("asks Meshtastic to send CHECK IN", async () => {
     const { link, writes } = await listen();
-    await link.sendCheckIn();
+    await link.sendCheckIn(0xa3);
     assert.equal(writes.length, 1);
     const { fromBinary } = await import("@bufbuild/protobuf");
     const toRadio = fromBinary(Mesh.ToRadioSchema, writes[0]);
@@ -93,5 +123,64 @@ describe("MeshLink", () => {
     if (toRadio.payloadVariant.value.payloadVariant.case !== "decoded") return;
     const text = new TextDecoder().decode(toRadio.payloadVariant.value.payloadVariant.value.payload);
     assert.equal(text, "CHECK IN");
+  });
+
+  it("counts a check-in only when the target board acknowledges it", async () => {
+    const { link, events } = await listen();
+    link.push(fromRadio({ case: "myInfo", value: create(Mesh.MyNodeInfoSchema, { myNodeNum: 0x11 }) }));
+    link.push(nodeA3());
+    await settle();
+    const packetId = await link.sendCheckIn(0xa3);
+    assert.ok(events.some((event) => event.type === "checkin-sent" && event.packetId === packetId));
+    // The leader's own acknowledgement only means another radio repeated it.
+    link.push(routing(0x11, packetId, Mesh.Routing_Error.NONE));
+    await settle();
+    assert.equal(events.some((event) => event.type === "checkin-ack"), false);
+    link.push(routing(0xa3, packetId, Mesh.Routing_Error.NONE));
+    await settle();
+    const ack = events.find((event) => event.type === "checkin-ack");
+    assert.ok(ack && ack.type === "checkin-ack");
+    assert.equal(ack.id, 0xa3);
+    assert.equal(ack.packetId, packetId);
+  });
+
+  it("reports No answer when the radio gives up", async () => {
+    const { link, events } = await listen();
+    link.push(fromRadio({ case: "myInfo", value: create(Mesh.MyNodeInfoSchema, { myNodeNum: 0x11 }) }));
+    link.push(nodeA3());
+    await settle();
+    const packetId = await link.sendCheckIn(0xa3);
+    link.push(routing(0x11, packetId, Mesh.Routing_Error.MAX_RETRANSMIT));
+    await settle();
+    const failed = events.filter((event) => event.type === "checkin-failed");
+    assert.equal(failed.length, 1);
+    const first = failed[0];
+    assert.ok(first.type === "checkin-failed");
+    assert.equal(first.id, 0xa3);
+    assert.equal(first.noAnswer, true);
+  });
+
+  it("marks a known board heard on any packet and carries the database time", async () => {
+    const { link, events } = await listen();
+    link.push(fromRadio({ case: "myInfo", value: create(Mesh.MyNodeInfoSchema, { myNodeNum: 0x11 }) }));
+    link.push(nodeA3());
+    await settle();
+    const card = events.find((event) => event.type === "live" && event.followerGps?.id === 0xa3);
+    assert.ok(card && card.type === "live");
+    const heardAt = card.followerGps?.heardAt ?? 0;
+    assert.ok(Date.now() - heardAt >= 59_000 && Date.now() - heardAt < 62_000);
+    link.push(routing(0xa3, 999, Mesh.Routing_Error.NONE));
+    await settle();
+    assert.ok(events.some((event) => event.type === "heard" && event.id === 0xa3));
+  });
+
+  it("rejects a check-in when the Bluetooth write fails instead of waiting forever", async () => {
+    const link = new MeshLink(
+      async () => {
+        throw new Error("GATT write failed");
+      },
+      () => undefined,
+    );
+    await assert.rejects(() => link.sendCheckIn(0xa3), /GATT write failed/);
   });
 });
