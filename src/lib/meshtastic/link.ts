@@ -6,6 +6,8 @@ import { buildBoardWrites, summarize, type BoardPlan, type CurrentBoardConfig } 
 const FIRST_NODE = 4;
 const REAL_TIME_SEC = 1_600_000_000;
 const QUIET_MS = 6 * 60 * 60 * 1000;
+/** Boards farther than this many relays away are not part of the group. */
+const MAX_HOPS = 2;
 /** A Bluetooth write that has not finished by now is treated as failed. */
 const WRITE_TIMEOUT_MS = 10_000;
 
@@ -39,7 +41,10 @@ export class MeshLink {
   private readonly pushPacket: (bytes: Uint8Array) => void;
   private myNode = 0;
   private readonly nodes = new Map<number, HeardNode>();
+  /** Never shown: heard over MQTT, ignored on the radio, or too many hops away. */
   private readonly rejected = new Set<number>();
+  /** Not heard for hours when the database was read. Cleared as soon as the board is heard again. */
+  private readonly stale = new Set<number>();
   private writeWaiters: WriteWaiter[] = [];
   /** Check-in packet id → the board it was sent to. */
   private readonly pending = new Map<number, number>();
@@ -80,6 +85,7 @@ export class MeshLink {
     });
     this.device.events.onMyNodeInfo.subscribe((info: Protobuf.Mesh.MyNodeInfo) => {
       this.myNode = info.myNodeNum >>> 0;
+      this.emit({ type: "my-node", id: this.myNode });
       if (this.nodes.delete(this.myNode)) this.emit(live({ followerGoneId: this.myNode }));
     });
     this.device.events.onNodeInfoPacket.subscribe((info: Protobuf.Mesh.NodeInfo) => {
@@ -216,8 +222,8 @@ export class MeshLink {
       if (decoded?.portnum === Protobuf.Portnums.PortNum.TEXT_MESSAGE_APP) {
         this.echoedTextId = packet.id >>> 0;
       }
-    } else if (from >= FIRST_NODE && this.nodes.has(from)) {
-      this.emit({ type: "heard", id: from, at: Date.now() });
+    } else if (from >= FIRST_NODE && this.myNode !== 0) {
+      this.onHeard(from, packet);
     }
 
     if (decoded?.portnum !== Protobuf.Portnums.PortNum.ROUTING_APP) return;
@@ -255,19 +261,48 @@ export class MeshLink {
     });
   }
 
+  /**
+   * Any packet from another board. A board without a GPS fix sends no position,
+   * so this is often the first sign of it: add it then instead of waiting hours for its name.
+   */
+  private onHeard(from: number, packet: Protobuf.Mesh.MeshPacket): void {
+    if (this.rejected.has(from)) return;
+    if (packet.viaMqtt) return;
+    const hops = packet.hopStart > 0 ? packet.hopStart - packet.hopLimit : 0;
+    if (hops > MAX_HOPS) return;
+    this.stale.delete(from);
+    const now = Date.now();
+    if (!this.nodes.has(from)) {
+      const node: HeardNode = { name: nodeName(undefined, from), fix: false, lat: null, lon: null };
+      this.nodes.set(from, node);
+      this.emit({ type: "node-seen", id: from, name: node.name, at: now });
+      return;
+    }
+    this.emit({ type: "heard", id: from, at: now });
+  }
+
   private onNode(info: Protobuf.Mesh.NodeInfo): void {
     const id = info.num >>> 0;
     const heardAt = info.lastHeard > REAL_TIME_SEC ? Math.min(info.lastHeard * 1000, Date.now()) : null;
-    const stale = heardAt != null && Date.now() - heardAt > QUIET_MS;
-    if (info.viaMqtt || info.isIgnored || (info.hopsAway ?? 0) > 2 || stale) {
+    if (info.viaMqtt || info.isIgnored || (info.hopsAway ?? 0) > MAX_HOPS) {
       this.rejected.add(id);
       if (this.nodes.delete(id)) this.emit(live({ followerGoneId: id }));
       return;
     }
     this.rejected.delete(id);
+    if (heardAt != null && Date.now() - heardAt > QUIET_MS) {
+      this.stale.add(id);
+      if (this.nodes.delete(id)) this.emit(live({ followerGoneId: id }));
+      return;
+    }
     const name = nodeName(info.user, id);
     if (info.position) this.onPosition(id, info.position, heardAt, name);
-    else this.onUser(id, info.user, heardAt);
+    else if (info.user) this.onUser(id, info.user, heardAt);
+    else if (id >= FIRST_NODE && id !== this.myNode) {
+      // In the database but never sent its name: still a board this radio heard.
+      this.nodes.set(id, { name, fix: false, lat: null, lon: null });
+      this.emit({ type: "node-seen", id, name, at: heardAt });
+    }
   }
 
   private onPosition(
@@ -276,7 +311,7 @@ export class MeshLink {
     heardAt: number | null,
     name: string | undefined,
   ): void {
-    if (id < FIRST_NODE || this.rejected.has(id)) return;
+    if (id < FIRST_NODE || this.rejected.has(id) || this.stale.has(id)) return;
     const fix = readFix(position);
     const positionAt = positionTime(position, heardAt);
     if (id === this.myNode) {
@@ -293,7 +328,7 @@ export class MeshLink {
   }
 
   private onUser(id: number, user: Protobuf.Mesh.User | undefined, heardAt: number | null): void {
-    if (id < FIRST_NODE || id === this.myNode || this.rejected.has(id) || !user) return;
+    if (id < FIRST_NODE || id === this.myNode || this.rejected.has(id) || this.stale.has(id) || !user) return;
     const previous = this.nodes.get(id);
     const node: HeardNode = {
       name: nodeName(user, id),

@@ -578,4 +578,60 @@ describe("ExcursionAppClient", () => {
     assert.equal(client.getState().followers[0]?.checkIn?.status, "received");
     await client.disconnect();
   });
+
+  it("lists a board heard before it has a position or a name", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    transport.emit({ type: "node-seen", id: 0xa3, name: "Meshtastic 00A3", at: Date.now() });
+    const card = client.getState().followers[0];
+    assert.equal(card?.id, 0xa3);
+    assert.equal(card?.name, "Meshtastic 00A3");
+    assert.equal(card?.fix, null);
+    await client.disconnect();
+  });
+
+  it("never lists the connected board as a follower", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    client.setGroup([
+      { id: 0x11, name: "Leader" },
+      { id: 0xa3, name: "A3" },
+    ]);
+    transport.emit({ type: "my-node", id: 0x11 });
+    assert.deepEqual(client.getState().followers.map((item) => item.id), [0xa3]);
+    await client.disconnect();
+  });
+
+  it("shows a group member not heard yet and flags it after the silence limit", async () => {
+    const time = clock();
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ now: time.now, silenceSeconds: 60 });
+    client.setGroup([{ id: 0xa3, name: "Ana" }]);
+    await client.connectDevice("beacon", transport);
+    const card = () => client.getState().followers.find((item) => item.id === 0xa3);
+    assert.equal(card()?.name, "Ana");
+    assert.equal(card()?.lastHeardAt, null);
+    time.advance(61_000);
+    client.tick();
+    assert.equal(card()?.silent, true);
+    await client.disconnect();
+  });
+
+  it("checks in and alerts only for group members", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ thresholdMeters: 40 });
+    await client.connectDevice("beacon", transport);
+    client.setGroup([{ id: 0xa3, name: "A3" }]);
+    transport.emit({ type: "live", counter: null, text: null, hex: "", gps: { fix: true, lat: 42.28, lon: -83.74 } });
+    followerAt(transport, 0xa3, 42.2801, Date.now());
+    followerAt(transport, 0x77, 42.29, Date.now());
+    assert.equal(client.getState().followers.find((item) => item.id === 0x77)?.outOfRange, true);
+    assert.equal(client.getState().outOfRange, false);
+    await client.sendCheckIn(BROADCAST_ID);
+    const checkIns = transport.commands.filter((command) => command.type === CmdType.CHECK_IN);
+    assert.deepEqual(checkIns.map((command) => command.targetId), [0xa3]);
+    await client.disconnect();
+  });
 });

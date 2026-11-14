@@ -209,4 +209,35 @@ describe("MeshLink", () => {
     assert.ok(ok && ok.type === "live");
     assert.equal(ok.text, "OK detected");
   });
+
+  it("adds a board from any packet before it sends a position", async () => {
+    const { link, events } = await listen();
+    link.push(fromRadio({ case: "myInfo", value: create(Mesh.MyNodeInfoSchema, { myNodeNum: 0x11 }) }));
+    link.push(routing(0xb4, 1, Mesh.Routing_Error.NONE));
+    await settle();
+    const seen = events.find((event) => event.type === "node-seen");
+    assert.ok(seen && seen.type === "node-seen");
+    assert.equal(seen.id, 0xb4);
+    assert.ok(events.some((event) => event.type === "my-node" && event.id === 0x11));
+  });
+
+  it("shows a board again once it is heard after being stale", async () => {
+    const { link, events } = await listen();
+    link.push(fromRadio({ case: "myInfo", value: create(Mesh.MyNodeInfoSchema, { myNodeNum: 0x11 }) }));
+    link.push(
+      fromRadio({
+        case: "nodeInfo",
+        value: create(Mesh.NodeInfoSchema, {
+          num: 0xa3,
+          lastHeard: Math.floor(Date.now() / 1000) - 8 * 60 * 60,
+          user: create(Mesh.UserSchema, { longName: "Follower A3", shortName: "A3" }),
+        }),
+      }),
+    );
+    await settle();
+    assert.equal(events.some((event) => event.type === "live" && event.followerGps?.id === 0xa3), false);
+    link.push(routing(0xa3, 2, Mesh.Routing_Error.NONE));
+    await settle();
+    assert.ok(events.some((event) => event.type === "node-seen" && event.id === 0xa3));
+  });
 });

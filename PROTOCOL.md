@@ -35,7 +35,19 @@ Every other node in the database is shown as a follower card, named by its long 
 - more than 2 hops away, or
 - not heard for 6 hours.
 
-Use a private channel with its own key. On a shared or default channel, any stranger's board within 2 hops shows up as a follower.
+A board appears as soon as the leader hears any packet from it, even before it has a GPS fix or has sent its name. Until its name arrives it is called `Meshtastic` plus the last four hex digits of its node number. A board left out as not heard for 6 hours comes back as soon as it is heard again.
+
+Use a private channel with its own key. On a shared or default channel, any stranger's board within 2 hops shows up too.
+
+## Group
+
+The group is the list of your team's boards, saved on the phone. Include every board, the leader too, so any board can lead.
+
+- With no group, every board heard is a follower. **Make these boards the group** adds the leader and every board shown.
+- With a group, only members are followers. Other boards heard go under **Other boards nearby**, with an **Add to group** button. They get no alerts and no check-ins.
+- A member not heard yet still has a card that says not heard yet. After the lost-contact time it is flagged as lost, so a board that never shows up is not missed.
+- **Remove** on a card takes that board out of the group.
+- The connected board is never listed as a follower. If it is not in the group, the app offers to add it.
 
 ## Lost contact
 

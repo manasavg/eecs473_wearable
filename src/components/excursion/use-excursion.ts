@@ -1,13 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ExcursionAppClient, type AppState } from "@/lib/ble/app-client";
+import { ExcursionAppClient, type AppState, type GroupMember } from "@/lib/ble/app-client";
 import { isNativeShell } from "@/lib/ble/create-transport";
 import { rememberedNativeBeaconName } from "@/lib/ble/native-transport";
 import type { BlePeer } from "@/lib/ble/transport";
 import type { BoardPlan } from "@/lib/meshtastic/setup";
 import { rememberedBeaconName } from "@/lib/ble/web-bluetooth-transport";
-import { loadLastKnown, loadSettings, saveLastKnown, saveSettings } from "@/lib/settings";
+import {
+  loadGroup,
+  loadLastKnown,
+  loadSettings,
+  saveGroup,
+  saveLastKnown,
+  saveSettings,
+} from "@/lib/settings";
 
 export function useExcursion() {
   const clientRef = useRef<ExcursionAppClient | null>(null);
@@ -27,6 +34,7 @@ export function useExcursion() {
     client.setSilenceSeconds(saved.silenceSeconds);
     client.setRequireConfirm(saved.requireConfirm);
     client.rememberLastKnown(loadLastKnown());
+    client.setGroup(loadGroup());
   }, [client]);
 
   // Save last known fixes whenever one changes, so a reconnect or restart still has them.
@@ -141,8 +149,18 @@ export function useExcursion() {
     [client],
   );
 
+  /** Add or remove a board from the team. The group is saved on the phone. */
+  const setGroup = useCallback(
+    (group: GroupMember[]) => {
+      client.setGroup(group);
+      saveGroup(client.getState().group);
+    },
+    [client],
+  );
+
   return {
     state,
+    setGroup,
     setUpBoard,
     rememberedName,
     busy,

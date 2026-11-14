@@ -106,6 +106,17 @@ export interface FollowerCheckIn {
   reason: string | null;
 }
 
+/** A board the team owns. Saved on the phone. */
+export interface GroupMember {
+  id: number;
+  name: string;
+}
+
+/** With an empty group every board heard is shown. Otherwise only members are followers. */
+export function isInGroup(state: Pick<AppState, "group">, id: number): boolean {
+  return state.group.length === 0 || state.group.some((member) => member.id === id);
+}
+
 export interface BoardSetupState {
   status: "idle" | "working" | "done" | "error";
   message: string | null;
@@ -161,6 +172,10 @@ export interface AppState {
   requireConfirm: boolean;
   /** The connected board's own settings, once it reports them. */
   board: BoardSettings | null;
+  /** Node number of the connected board. It is never listed as a follower. */
+  leaderId: number | null;
+  /** The team's boards. Empty means show every board heard. */
+  group: GroupMember[];
   boardSetup: BoardSetupState;
   /** When this link came up. Silence counts from here for a board never heard. */
   connectedAt: number | null;
@@ -210,6 +225,8 @@ export function createInitialState(
     silenceSeconds: clampSilence(silenceSeconds),
     requireConfirm,
     board: null,
+    leaderId: null,
+    group: [],
     boardSetup: { status: "idle", message: null },
     connectedAt: null,
     members: [],
@@ -236,7 +253,8 @@ export function createInitialState(
 }
 
 function projectFollowers(state: AppState, followers: TrackedFollower[], now: number): AppState {
-  const marked = markSilence(followers, now, state.silenceSeconds, state.connectedAt);
+  const roster = withRoster(followers, state);
+  const marked = markSilence(roster, now, state.silenceSeconds, state.connectedAt);
   const primary = marked[0] ?? null;
   return {
     ...state,
@@ -246,7 +264,38 @@ function projectFollowers(state: AppState, followers: TrackedFollower[], now: nu
     followerLon: primary?.lon ?? null,
     separationKnown: primary?.separationKnown ?? null,
     separationM: primary?.separationM ?? null,
-    outOfRange: marked.some((follower) => follower.outOfRange),
+    outOfRange: marked.some((follower) => follower.outOfRange && isInGroup(state, follower.id)),
+  };
+}
+
+/**
+ * Drop the leader from the list, and add a card for each group member not heard yet,
+ * so a missing board shows up as missing instead of not at all.
+ */
+function withRoster(followers: TrackedFollower[], state: AppState): TrackedFollower[] {
+  const list = state.leaderId == null ? followers : followers.filter((item) => item.id !== state.leaderId);
+  const missing = state.group.filter(
+    (member) => member.id !== state.leaderId && !list.some((item) => item.id === member.id),
+  );
+  if (missing.length === 0) return list;
+  return [...list, ...missing.map((member) => emptyFollower(member.id, member.name))].sort((a, b) => a.id - b.id);
+}
+
+function emptyFollower(id: number, name: string | null): TrackedFollower {
+  return {
+    id,
+    name,
+    fix: null,
+    lat: null,
+    lon: null,
+    separationKnown: null,
+    separationM: null,
+    outOfRange: false,
+    lastHeardAt: null,
+    positionAt: null,
+    silent: false,
+    checkIn: null,
+    lastKnown: null,
   };
 }
 
@@ -403,7 +452,19 @@ export class ExcursionAppClient {
   }
 
   private fresh(): AppState {
-    return createInitialState(this.state.thresholdMeters, this.state.silenceSeconds, this.state.requireConfirm);
+    return {
+      ...createInitialState(this.state.thresholdMeters, this.state.silenceSeconds, this.state.requireConfirm),
+      group: this.state.group,
+    };
+  }
+
+  /** Replace the team's boards. Members not heard yet get an empty card. */
+  setGroup(group: GroupMember[]): void {
+    const unique = [...new Map(group.map((member) => [member.id >>> 0, { ...member, id: member.id >>> 0 }])).values()];
+    const next = { ...this.state, group: unique };
+    const now = this.now();
+    const followers = updateLastKnown(withRoster(this.state.followers, next), this.remembered, now);
+    this.commit(projectFollowers(next, followers, now));
   }
 
   /** Appendix C: update_ui — the dashboard subscribes instead of polling. */
@@ -593,7 +654,9 @@ export class ExcursionAppClient {
     }
     const targets =
       targetId === BROADCAST_ID
-        ? this.state.followers.map((follower) => follower.id)
+        ? this.state.followers
+            .filter((follower) => isInGroup(this.state, follower.id))
+            .map((follower) => follower.id)
         : this.state.followers.some((follower) => follower.id === targetId)
           ? [targetId]
           : [];
@@ -684,13 +747,17 @@ export class ExcursionAppClient {
     switch (event.type) {
       case "connected":
         this.commit(
-          {
-            ...this.state,
-            connection: "connected",
-            error: null,
-            deviceName: event.deviceName,
-            connectedAt: this.state.connectedAt ?? this.now(),
-          },
+          projectFollowers(
+            {
+              ...this.state,
+              connection: "connected",
+              error: null,
+              deviceName: event.deviceName,
+              connectedAt: this.state.connectedAt ?? this.now(),
+            },
+            updateLastKnown(withRoster(this.state.followers, this.state), this.remembered, this.now()),
+            this.now(),
+          ),
           {
             id: nextId(),
             at: this.now(),
@@ -730,6 +797,29 @@ export class ExcursionAppClient {
       case "alert":
         this.triggerAlert(event.deviceId, event.status);
         return;
+      case "my-node": {
+        const next = { ...this.state, leaderId: event.id };
+        this.commit(projectFollowers(next, this.state.followers, this.now()));
+        return;
+      }
+      case "node-seen": {
+        const exists = this.state.followers.some((follower) => follower.id === event.id);
+        const followers = updateLastKnown(
+          upsertTracked(
+            this.state.followers,
+            event.id,
+            {
+              ...(exists ? {} : { name: event.name }),
+              ...(event.at != null ? { lastHeardAt: Math.min(event.at, this.now()) } : {}),
+            },
+            this.state.thresholdMeters,
+          ),
+          this.remembered,
+          this.now(),
+        );
+        this.commit(projectFollowers({ ...this.state, lastPacketAt: this.now() }, followers, this.now()));
+        return;
+      }
       case "board-settings":
         this.commit({ ...this.state, board: event.settings });
         return;

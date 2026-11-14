@@ -23,6 +23,10 @@ export type BleEvent =
   | { type: "roster-cleared" }
   /** The connected board's own channel, position, and OK button settings. */
   | { type: "board-settings"; settings: BoardSettings }
+  /** The node number of the board the phone is connected to. */
+  | { type: "my-node"; id: number }
+  /** A board heard for the first time, before its position or name. */
+  | { type: "node-seen"; id: number; name: string; at: number | null }
   /** Any packet from a board the leader is tracking. */
   | { type: "heard"; id: number; at: number }
   /** A CHECK IN for this board reached the leader's send queue. */

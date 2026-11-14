@@ -1,5 +1,5 @@
 import { DEFAULT_SILENCE_S, DEFAULT_THRESHOLD_M, clampSilence } from "./ble/constants";
-import type { LastKnown } from "./ble/app-client";
+import type { GroupMember, LastKnown } from "./ble/app-client";
 import { clampThreshold } from "./ble/protocol";
 
 const KEY = "excursion.settings";
@@ -110,6 +110,31 @@ export function loadTeam(): SavedTeam | null {
 export function saveTeam(team: SavedTeam): void {
   try {
     localStorage.setItem(TEAM_KEY, JSON.stringify(team));
+  } catch {
+    /* private mode */
+  }
+}
+
+const GROUP_KEY = "excursion.group";
+
+/** The team's boards, so strangers' boards stay out of the follower list. */
+export function loadGroup(): GroupMember[] {
+  try {
+    if (typeof localStorage === "undefined") return [];
+    const raw = localStorage.getItem(GROUP_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as Array<Partial<GroupMember>>;
+    return parsed
+      .filter((item): item is GroupMember => typeof item?.id === "number" && typeof item?.name === "string")
+      .map((item) => ({ id: item.id >>> 0, name: item.name }));
+  } catch {
+    return [];
+  }
+}
+
+export function saveGroup(group: GroupMember[]): void {
+  try {
+    localStorage.setItem(GROUP_KEY, JSON.stringify(group));
   } catch {
     /* private mode */
   }

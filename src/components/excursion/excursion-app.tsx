@@ -8,7 +8,7 @@ import {
   THRESHOLD_MAX_M,
   THRESHOLD_MIN_M,
 } from "@/lib/ble/constants";
-import type { CheckInStatus, LastKnown, TrackedFollower } from "@/lib/ble/app-client";
+import { isInGroup, type CheckInStatus, type LastKnown, type TrackedFollower } from "@/lib/ble/app-client";
 import { isNativeShell } from "@/lib/ble/create-transport";
 import { webBluetoothAvailable } from "@/lib/ble/web-bluetooth-transport";
 import { bearingDegrees, cardinalLabel, guideCue, haversineMeters, relativeBearing } from "@/lib/geo";
@@ -92,7 +92,8 @@ export function ExcursionApp() {
   // Notify once each time a follower goes out of range, goes silent, or misses a check-in.
   useEffect(() => {
     const next: typeof seen.current = {};
-    for (const follower of state.followers) {
+    const group = { group: state.group };
+    for (const follower of state.followers.filter((item) => isInGroup(group, item.id))) {
       const previous = seen.current[follower.id];
       const who = followerLabel(follower);
       const checkIn = follower.checkIn?.status ?? null;
@@ -118,9 +119,15 @@ export function ExcursionApp() {
       next[follower.id] = { out: follower.outOfRange, silent: follower.silent, checkIn };
     }
     seen.current = next;
-  }, [state.followers, state.thresholdMeters, state.silenceSeconds]);
+  }, [state.followers, state.group, state.thresholdMeters, state.silenceSeconds]);
 
-  const followers = state.followers;
+  const grouped = state.group.length > 0;
+  const followers = state.followers.filter((follower) => isInGroup(state, follower.id));
+  const others = grouped ? state.followers.filter((follower) => !isInGroup(state, follower.id)) : [];
+  const leaderInGroup = state.leaderId == null || isInGroup(state, state.leaderId);
+  const addToGroup = (items: Array<{ id: number; name: string }>) =>
+    app.setGroup([...state.group, ...items.filter((item) => !state.group.some((member) => member.id === item.id))]);
+  const removeFromGroup = (id: number) => app.setGroup(state.group.filter((member) => member.id !== id));
   const outFollowers = followers.filter((follower) => follower.outOfRange && !follower.silent);
   const silentFollowers = followers.filter((follower) => follower.silent);
   const asked = followers.filter((follower) => follower.checkIn);
@@ -263,6 +270,19 @@ export function ExcursionApp() {
                   : "Disconnected"}
             {state.deviceName ? ` · ${state.deviceName}` : ""}
           </p>
+          {grouped && !leaderInGroup && state.leaderId != null && (
+            <p className="text-sm text-neutral-600">
+              This board is not in the group.{" "}
+              <button
+                type="button"
+                className="underline"
+                onClick={() => addToGroup([{ id: state.leaderId!, name: state.deviceName ?? boardLabel(state.leaderId!) }])}
+              >
+                Add it
+              </button>{" "}
+              so it shows as a follower when another board leads.
+            </p>
+          )}
           {state.error && (
             <p className="text-sm text-red-700" role="alert">
               {state.error}{" "}
@@ -296,10 +316,30 @@ export function ExcursionApp() {
               Followers{followers.length > 0 ? ` (${followers.length})` : ""}
             </h2>
             <p className="mt-2 text-sm text-neutral-600">
-              {followers.length === 0
-                ? "Waiting for the other boards. They show up when this radio hears them. Nodes from the public internet are left out."
-                : "Every board this radio has heard. GPS antennas need a view of the sky."}
+              {grouped
+                ? "Your group's boards. A board not heard yet still has a card, so a missing one stands out."
+                : followers.length === 0
+                  ? "Waiting for the other boards. They show up when this radio hears them, even before they have a GPS fix. Nodes from the public internet are left out."
+                  : "Every board this radio hears, including other people's on the same channel. Add your boards to the group to hide the rest."}
             </p>
+            {!grouped && followers.length > 0 && (
+              <button
+                type="button"
+                className="mt-3 h-11 w-full border border-black bg-white"
+                onClick={() => {
+                  const leader =
+                    state.leaderId != null
+                      ? [{ id: state.leaderId, name: state.deviceName ?? boardLabel(state.leaderId) }]
+                      : [];
+                  addToGroup([
+                    ...leader,
+                    ...followers.map((follower) => ({ id: follower.id, name: followerLabel(follower) })),
+                  ]);
+                }}
+              >
+                Make these {followers.length + (state.leaderId != null ? 1 : 0)} boards the group
+              </button>
+            )}
             {followers.length > 0 && (compass.needsGesture || compass.heading == null) && (
               <button
                 type="button"
@@ -322,6 +362,21 @@ export function ExcursionApp() {
                   now={now}
                   linked={linked}
                   onCheckIn={() => void app.checkIn(follower.id)}
+                  groupAction={
+                    grouped
+                      ? {
+                          label: "Remove",
+                          onClick: () => {
+                            if (window.confirm(`Remove ${followerLabel(follower)} from the group?`)) {
+                              removeFromGroup(follower.id);
+                            }
+                          },
+                        }
+                      : {
+                          label: "Add to group",
+                          onClick: () => addToGroup([{ id: follower.id, name: followerLabel(follower) }]),
+                        }
+                  }
                   leaderFix={state.gpsFix}
                   leaderLat={state.gpsLat}
                   leaderLon={state.gpsLon}
@@ -329,6 +384,30 @@ export function ExcursionApp() {
                 />
               ))}
             </div>
+            {others.length > 0 && (
+              <details className="mt-4 border border-neutral-200 px-3 py-2">
+                <summary className="cursor-pointer text-sm text-neutral-600">
+                  Other boards nearby ({others.length}) · not in your group
+                </summary>
+                <ul className="mt-2 flex flex-col gap-2">
+                  {others.map((other) => (
+                    <li key={other.id} className="flex items-center justify-between gap-2 text-sm">
+                      <span>
+                        {followerLabel(other)}
+                        <span className="text-neutral-500"> · heard {ago(other.lastHeardAt, now)}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="h-9 shrink-0 border border-neutral-300 bg-white px-3"
+                        onClick={() => addToGroup([{ id: other.id, name: followerLabel(other) }])}
+                      >
+                        Add to group
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
           </section>
 
           <section className="border-t border-neutral-200 pt-6">
@@ -458,6 +537,7 @@ function FollowerCard({
   now,
   linked,
   onCheckIn,
+  groupAction,
   leaderFix,
   leaderLat,
   leaderLon,
@@ -467,6 +547,7 @@ function FollowerCard({
   now: number;
   linked: boolean;
   onCheckIn: () => void;
+  groupAction: { label: string; onClick: () => void };
   leaderFix: boolean | null;
   leaderLat: number | null;
   leaderLon: number | null;
@@ -493,7 +574,8 @@ function FollowerCard({
       <div className="flex items-baseline justify-between gap-2">
         <h3 className="text-sm font-medium">{label}</h3>
         <p className={`text-sm ${follower.silent ? "text-red-700" : "text-neutral-600"}`}>
-          {follower.silent ? "Lost contact · " : ""}heard {ago(follower.lastHeardAt, now)}
+          {follower.silent ? "Lost contact · " : ""}
+          {follower.lastHeardAt == null ? "not heard yet" : `heard ${ago(follower.lastHeardAt, now)}`}
         </p>
       </div>
       <p className={`mt-2 text-3xl tabular-nums ${follower.silent ? "text-neutral-400" : ""}`}>
@@ -564,6 +646,9 @@ function FollowerCard({
           Check in
         </button>
       </div>
+      <button type="button" className="mt-2 text-xs text-neutral-500 underline" onClick={groupAction.onClick}>
+        {groupAction.label}
+      </button>
     </article>
   );
 }
