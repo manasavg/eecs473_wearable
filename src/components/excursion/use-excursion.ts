@@ -6,7 +6,7 @@ import { isNativeShell } from "@/lib/ble/create-transport";
 import { rememberedNativeBeaconName } from "@/lib/ble/native-transport";
 import type { BlePeer } from "@/lib/ble/transport";
 import { rememberedBeaconName } from "@/lib/ble/web-bluetooth-transport";
-import { loadSettings, saveSettings } from "@/lib/settings";
+import { loadLastKnown, loadSettings, saveLastKnown, saveSettings } from "@/lib/settings";
 
 export function useExcursion() {
   const clientRef = useRef<ExcursionAppClient | null>(null);
@@ -24,7 +24,17 @@ export function useExcursion() {
     const saved = loadSettings();
     client.setThreshold(saved.thresholdMeters);
     client.setSilenceSeconds(saved.silenceSeconds);
+    client.rememberLastKnown(loadLastKnown());
   }, [client]);
+
+  // Save last known fixes whenever one changes, so a reconnect or restart still has them.
+  const savedFixes = useRef("");
+  useEffect(() => {
+    const snapshot = JSON.stringify(client.getLastKnown());
+    if (snapshot === savedFixes.current || snapshot === "{}") return;
+    savedFixes.current = snapshot;
+    saveLastKnown(client.getLastKnown());
+  }, [client, state.followers]);
 
   useEffect(() => {
     if (isNativeShell()) setRememberedName(rememberedNativeBeaconName());

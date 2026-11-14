@@ -42,6 +42,15 @@ Use a private channel with its own key. On a shared or default channel, any stra
 The app records when the leader last heard anything from each follower. A follower silent for longer than the lost-contact limit is flagged on its card and in the alert banner, and the phone sends a notification. Its distance is then shown as a last known value. The limit is 120 s by default, adjustable from 30 to 3600 s, and saved on the phone.
 
 A board that the radio's database lists but never timed counts its silence from when the phone connected.
+
+## Last known location
+
+The phone keeps each follower's newest valid GPS fix and the time it was taken: the board's GPS time when the radio has one, otherwise when the phone received it. A lost fix or a silent board does not erase it, and an older fix never replaces a newer one.
+
+When a follower is out of range, has lost contact, or has no fix, its card shows that last known location with the clock time and how long ago it was taken. It also shows the distance and direction from the leader's current fix, plus an Open in Maps link. The alert banner and the lost-contact notification include the same location and time.
+
+The phone saves these locations, so they survive a reconnect or an app restart. Locations older than 7 days are dropped.
+
 ## GPS
 
 The Meshtastic firmware reads the GPS. Wire the NEO-6M to the Heltec V4 GPS port: GPIO 38 toward the GPS module, GPIO 39 toward the board, 9600 baud, VCC to 5V, GND to GND. The antennas need a view of the sky.

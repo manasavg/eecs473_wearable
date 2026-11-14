@@ -454,4 +454,78 @@ describe("ExcursionAppClient", () => {
     assert.equal(client.getState().followers[0]?.separationKnown, false);
     await client.disconnect();
   });
+
+  it("keeps the last known fix and its time when the fix drops", async () => {
+    const time = clock();
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ now: time.now });
+    await client.connectDevice("beacon", transport);
+    const takenAt = time.now();
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "",
+      followerGps: { id: 0xa3, fix: true, lat: 42.281, lon: -83.74, heardAt: takenAt, positionAt: takenAt },
+    });
+    time.advance(30_000);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "",
+      followerGps: { id: 0xa3, fix: false, lat: null, lon: null, heardAt: time.now(), positionAt: time.now() },
+    });
+    const card = client.getState().followers[0];
+    assert.equal(card?.fix, false);
+    assert.equal(card?.lat, null);
+    assert.deepEqual(card?.lastKnown, { lat: 42.281, lon: -83.74, at: takenAt });
+    await client.disconnect();
+  });
+
+  it("does not replace a last known fix with an older one", async () => {
+    const time = clock();
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ now: time.now });
+    client.rememberLastKnown({ 0xa3: { lat: 42.29, lon: -83.75, at: time.now() } });
+    await client.connectDevice("beacon", transport);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "",
+      followerGps: { id: 0xa3, fix: true, lat: 42.2, lon: -83.7, positionAt: time.now() - 3_600_000 },
+    });
+    assert.deepEqual(client.getState().followers[0]?.lastKnown, { lat: 42.29, lon: -83.75, at: time.now() });
+    time.advance(5_000);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "",
+      followerGps: { id: 0xa3, fix: true, lat: 42.3, lon: -83.76, positionAt: time.now() },
+    });
+    assert.deepEqual(client.getState().followers[0]?.lastKnown, { lat: 42.3, lon: -83.76, at: time.now() });
+    await client.disconnect();
+  });
+
+  it("keeps last known fixes across a reconnect", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    followerAt(transport, 0xa3, 42.281, Date.now());
+    await client.disconnect();
+    assert.equal(client.getState().followers.length, 0);
+    await client.connectDevice("beacon", transport);
+    transport.emit({
+      type: "live",
+      counter: null,
+      text: null,
+      hex: "",
+      followerGps: { id: 0xa3, fix: false, lat: null, lon: null },
+    });
+    assert.equal(client.getState().followers[0]?.lastKnown?.lat, 42.281);
+    assert.equal(client.getLastKnown()[0xa3]?.lat, 42.281);
+    await client.disconnect();
+  });
 });

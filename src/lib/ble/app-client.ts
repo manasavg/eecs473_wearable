@@ -88,6 +88,14 @@ export interface FollowerCheckIn {
   reason: string | null;
 }
 
+/** The newest valid GPS fix a board reported. Kept through fix loss, silence and reconnects. */
+export interface LastKnown {
+  lat: number;
+  lon: number;
+  /** When that position was taken, or when the phone received it if the radio had no clock. */
+  at: number;
+}
+
 /** One of the other boards, tracked by the leader the phone is connected to. */
 export interface TrackedFollower {
   id: number;
@@ -106,6 +114,7 @@ export interface TrackedFollower {
   /** Not heard for longer than silenceSeconds. Its distance is stale. */
   silent: boolean;
   checkIn: FollowerCheckIn | null;
+  lastKnown: LastKnown | null;
 }
 
 /** What the flashed ESP32 sketch is sending right now. */
@@ -245,6 +254,31 @@ function patchCheckIn(
   });
 }
 
+/**
+ * Record each follower's newest valid fix. A lost fix or a silent board keeps the old one.
+ * `remembered` carries fixes across reconnects and app restarts, and is updated in place.
+ */
+function updateLastKnown(
+  followers: TrackedFollower[],
+  remembered: Map<number, LastKnown>,
+  now: number,
+): TrackedFollower[] {
+  return followers.map((follower) => {
+    let known = follower.lastKnown ?? remembered.get(follower.id) ?? null;
+    if (follower.fix === true && follower.lat != null && follower.lon != null) {
+      const moved = !known || known.lat !== follower.lat || known.lon !== follower.lon;
+      const newer = follower.positionAt != null && (!known || follower.positionAt > known.at);
+      if (moved || newer) {
+        const at = follower.positionAt ?? now;
+        // Never replace a fix with an older one, for example a stale database entry on connect.
+        if (!known || at >= known.at) known = { lat: follower.lat, lon: follower.lon, at };
+      }
+    }
+    if (known) remembered.set(follower.id, known);
+    return known === follower.lastKnown ? follower : { ...follower, lastKnown: known };
+  });
+}
+
 function latest(a: number | null, b: number | null | undefined): number | null {
   if (b == null) return a;
   if (a == null) return b;
@@ -272,6 +306,7 @@ function upsertTracked(
     positionAt: patch.positionAt !== undefined ? patch.positionAt : (previous?.positionAt ?? null),
     silent: previous?.silent ?? false,
     checkIn: patch.checkIn !== undefined ? patch.checkIn : (previous?.checkIn ?? null),
+    lastKnown: previous?.lastKnown ?? null,
   };
   next.outOfRange = isOutOfRange(next.separationKnown, next.separationM, thresholdMeters);
   return [...followers.filter((follower) => follower.id !== id), next].sort((a, b) => a.id - b.id);
@@ -313,6 +348,7 @@ export class ExcursionAppClient {
   private closing = false;
   private ticker: ReturnType<typeof setInterval> | null = null;
   private readonly now: () => number;
+  private readonly remembered = new Map<number, LastKnown>();
 
   constructor(initial?: { thresholdMeters?: number; silenceSeconds?: number; now?: () => number }) {
     this.state = createInitialState(initial?.thresholdMeters, initial?.silenceSeconds);
@@ -443,6 +479,22 @@ export class ExcursionAppClient {
       outOfRange: isOutOfRange(follower.separationKnown, follower.separationM, thresholdMeters),
     }));
     this.commit(projectFollowers({ ...this.state, thresholdMeters }, followers, this.now()));
+  }
+
+  /** Last known fixes saved from an earlier session. A newer fix replaces each one. */
+  rememberLastKnown(saved: Record<number, LastKnown>): void {
+    for (const [key, known] of Object.entries(saved)) {
+      const id = Number(key);
+      const current = this.remembered.get(id);
+      if (!current || known.at > current.at) this.remembered.set(id, known);
+    }
+    const followers = updateLastKnown(this.state.followers, this.remembered, this.now());
+    this.commit(projectFollowers(this.state, followers, this.now()));
+  }
+
+  /** Every board's last known fix, including boards not tracked right now. */
+  getLastKnown(): Record<number, LastKnown> {
+    return Object.fromEntries(this.remembered);
   }
 
   /** How long a follower may stay silent before it is flagged. */
@@ -705,6 +757,7 @@ export class ExcursionAppClient {
         const gpsLon = gps ? gps.lon : this.state.gpsLon;
         const gpsAt = gps ? (gps.at ?? (gps.fix ? now : null)) : this.state.gpsAt;
         followers = fillDistance(followers, gpsFix, gpsLat, gpsLon, this.state.thresholdMeters);
+        followers = updateLastKnown(followers, this.remembered, now);
         this.commit(
           projectFollowers(
             {

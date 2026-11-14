@@ -46,8 +46,9 @@ export function notifyOutOfRange(meters: number, limitMeters: number, who = "Fol
   return notify(`${who} is out of range`, outOfRangeBody(meters, limitMeters, who));
 }
 
-export function notifySilent(who: string, seconds: number): Promise<void> {
-  return notify(`Lost contact with ${who}`, `${who} has not been heard for over ${formatDuration(seconds)}.`);
+export function notifySilent(who: string, seconds: number, lastKnown: string | null = null): Promise<void> {
+  const body = `${who} has not been heard for over ${formatDuration(seconds)}.`;
+  return notify(`Lost contact with ${who}`, lastKnown ? `${body} Its ${lastKnown}.` : body);
 }
 
 export function notifyNoAnswer(who: string, reason: string): Promise<void> {

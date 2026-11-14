@@ -8,10 +8,10 @@ import {
   THRESHOLD_MAX_M,
   THRESHOLD_MIN_M,
 } from "@/lib/ble/constants";
-import type { CheckInStatus, TrackedFollower } from "@/lib/ble/app-client";
+import type { CheckInStatus, LastKnown, TrackedFollower } from "@/lib/ble/app-client";
 import { isNativeShell } from "@/lib/ble/create-transport";
 import { webBluetoothAvailable } from "@/lib/ble/web-bluetooth-transport";
-import { bearingDegrees, cardinalLabel, guideCue, relativeBearing } from "@/lib/geo";
+import { bearingDegrees, cardinalLabel, guideCue, haversineMeters, relativeBearing } from "@/lib/geo";
 import { boardLabel, formatGpsDegrees, formatSeparation } from "@/lib/format";
 import {
   ensureNotifyPermission,
@@ -40,6 +40,19 @@ function useNow(intervalMs = 5000): number {
 function ago(at: number | null, now: number): string {
   if (at == null) return "never";
   return `${formatDuration((now - at) / 1000)} ago`;
+}
+
+/** "3:42:10 PM" today, "Nov 13, 3:42 PM" on another day. */
+function clockTime(at: number, now: number): string {
+  const when = new Date(at);
+  if (when.toDateString() === new Date(now).toDateString()) {
+    return when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  }
+  return when.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function lastKnownSummary(known: LastKnown, now: number): string {
+  return `last known ${formatGpsDegrees(known.lat)}, ${formatGpsDegrees(known.lon)} at ${clockTime(known.at, now)}`;
 }
 
 export function ExcursionApp() {
@@ -82,7 +95,11 @@ export function ExcursionApp() {
           void notifyOutOfRange(follower.separationM, state.thresholdMeters, who);
         }
         if (follower.silent && !previous.silent) {
-          void notifySilent(who, state.silenceSeconds);
+          void notifySilent(
+            who,
+            state.silenceSeconds,
+            follower.lastKnown ? lastKnownSummary(follower.lastKnown, Date.now()) : null,
+          );
         }
         if ((checkIn === "noAnswer" || checkIn === "failed") && previous.checkIn !== checkIn) {
           void notifyNoAnswer(who, follower.checkIn?.reason ?? "No answer");
@@ -207,14 +224,16 @@ export function ExcursionApp() {
             <div className="border border-red-700 bg-red-50 px-3 py-3 text-sm text-red-800" role="alert">
               {silentFollowers.map((follower) => (
                 <p key={`silent-${follower.id}`}>
-                  Lost contact with {followerLabel(follower)} · last heard {ago(follower.lastHeardAt, now)}.
+                  Lost contact with {followerLabel(follower)} · last heard {ago(follower.lastHeardAt, now)}
+                  {follower.lastKnown ? ` · ${lastKnownSummary(follower.lastKnown, now)}` : ""}.
                 </p>
               ))}
               {outFollowers.map((follower) => (
                 <p key={`out-${follower.id}`}>
                   {followerLabel(follower)} is out of range
                   {follower.separationM != null ? ` · ${formatSeparation(follower.separationM)}` : ""}. Limit{" "}
-                  {state.thresholdMeters} m.
+                  {state.thresholdMeters} m
+                  {follower.lastKnown ? ` · ${lastKnownSummary(follower.lastKnown, now)}` : ""}.
                 </p>
               ))}
             </div>
@@ -473,6 +492,16 @@ function FollowerCard({
       ) : (
         <p className="mt-2 text-sm text-neutral-600">{follower.fix === false ? "No GPS fix" : "No position yet"}</p>
       )}
+      {follower.lastKnown && (alarm || follower.fix !== true) && (
+        <LastKnownBlock
+          known={follower.lastKnown}
+          label={label}
+          now={now}
+          leaderFix={leaderFix}
+          leaderLat={leaderLat}
+          leaderLon={leaderLon}
+        />
+      )}
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-neutral-200 pt-3">
         <p
           className={`text-sm ${
@@ -495,5 +524,51 @@ function FollowerCard({
         </button>
       </div>
     </article>
+  );
+}
+
+function LastKnownBlock({
+  known,
+  label,
+  now,
+  leaderFix,
+  leaderLat,
+  leaderLon,
+}: {
+  known: LastKnown;
+  label: string;
+  now: number;
+  leaderFix: boolean | null;
+  leaderLat: number | null;
+  leaderLon: number | null;
+}) {
+  const fromHere =
+    leaderFix === true && leaderLat != null && leaderLon != null
+      ? {
+          meters: haversineMeters(leaderLat, leaderLon, known.lat, known.lon),
+          bearing: bearingDegrees(leaderLat, leaderLon, known.lat, known.lon),
+        }
+      : null;
+  const maps = `https://maps.apple.com/?ll=${known.lat},${known.lon}&q=${encodeURIComponent(
+    `${label} last known`,
+  )}`;
+  return (
+    <div className="mt-3 border border-amber-600 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+      <p className="font-medium">Last known location</p>
+      <p className="mt-1 tabular-nums">
+        {formatGpsDegrees(known.lat)}, {formatGpsDegrees(known.lon)}
+      </p>
+      <p className="mt-1">
+        {clockTime(known.at, now)} · {ago(known.at, now)}
+      </p>
+      {fromHere && (
+        <p className="mt-1">
+          {formatSeparation(fromHere.meters)} {cardinalLabel(fromHere.bearing)} of the leader now
+        </p>
+      )}
+      <a className="mt-1 inline-block underline" href={maps} target="_blank" rel="noreferrer">
+        Open in Maps
+      </a>
+    </div>
   );
 }
