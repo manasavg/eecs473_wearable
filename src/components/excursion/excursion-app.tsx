@@ -311,6 +311,18 @@ export function ExcursionApp() {
             </p>
           </section>
 
+          {state.board?.region === 0 && (
+            <p className="border border-red-700 bg-red-50 px-3 py-3 text-sm text-red-800" role="alert">
+              This board&apos;s LoRa region is not set, so its radio is off and it cannot hear the other boards. Open
+              Board setup below, choose the region, and set up this board.
+            </p>
+          )}
+          {state.board?.txEnabled === false && (
+            <p className="border border-red-700 bg-red-50 px-3 py-3 text-sm text-red-800" role="alert">
+              This board&apos;s transmit is turned off, so other boards cannot hear it. Board setup turns it back on.
+            </p>
+          )}
+
           <section className="border-t border-neutral-200 pt-6">
             <h2 className="text-sm font-medium">
               Followers{followers.length > 0 ? ` (${followers.length})` : ""}

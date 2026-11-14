@@ -49,6 +49,14 @@ The group is the list of your team's boards, saved on the phone. Include every b
 - **Remove** on a card takes that board out of the group.
 - The connected board is never listed as a follower. If it is not in the group, the app offers to add it.
 
+### When the phone sees a board but the leader does not
+
+The phone finds boards over Bluetooth, which works whatever the radios are set to. Followers come over LoRa, so a board the phone can see but the leader never lists cannot be heard over the radio. Check, in this order:
+
+1. The region is set. The dashboard warns when the connected board's region is not set.
+2. Every board has the same region, preset, and channel. Board setup sets all three, and lists any difference on the connected board.
+3. Both boards have antennas attached.
+
 ## Lost contact
 
 The app records when the leader last heard anything from each follower. A follower silent for longer than the lost-contact limit is flagged on its card and in the alert banner, and the phone sends a notification. Its distance is then shown as a last known value. The limit is 120 s by default, adjustable from 30 to 3600 s, and saved on the phone.
@@ -136,6 +144,8 @@ The Board setup section on the dashboard writes the settings above to the connec
 
 | Field | Written to the board |
 | --- | --- |
+| Region | LoRa region, US by default. A freshly flashed board has none, and its radio stays off until one is set. |
+| (fixed) | LongFast preset, Meshtastic's default, and transmit on. The other radio settings stay as they were. |
 | Team channel name | Primary channel name (up to 11 characters) |
 | Team key | Primary channel key (AES-256). The first time, the app generates one. |
 | Position every | Position broadcast interval, 15–3600 s, default 30 s. Smart position off. GPS read every 15 s. |

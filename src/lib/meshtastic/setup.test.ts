@@ -24,8 +24,20 @@ function plan(overrides: Partial<BoardPlan> = {}): BoardPlan {
     positionSecs: 30,
     gpsUpdateSecs: 15,
     okButtonPin: 5,
+    region: Config.Config_LoRaConfig_RegionCode.US,
     ...overrides,
   };
+}
+
+function boardLora(region = Config.Config_LoRaConfig_RegionCode.UNSET): Config.Config_LoRaConfig {
+  return create(Config.Config_LoRaConfigSchema, {
+    region,
+    usePreset: true,
+    modemPreset: Config.Config_LoRaConfig_ModemPreset.LONG_FAST,
+    hopLimit: 3,
+    txEnabled: true,
+    txPower: 22,
+  });
 }
 
 function boardPosition(): Config.Config_PositionConfig {
@@ -42,7 +54,7 @@ function boardPosition(): Config.Config_PositionConfig {
 
 describe("buildBoardWrites", () => {
   it("changes only the reporting fields and keeps the board's GPS wiring and mode", () => {
-    const writes = buildBoardWrites({ position: boardPosition() }, plan());
+    const writes = buildBoardWrites({ position: boardPosition(), lora: boardLora() }, plan());
     assert.equal(writes.position.payloadVariant.case, "position");
     if (writes.position.payloadVariant.case !== "position") return;
     const position = writes.position.payloadVariant.value;
@@ -58,13 +70,13 @@ describe("buildBoardWrites", () => {
   it("turns GPS on when the board had it disabled", () => {
     const off = boardPosition();
     off.gpsMode = Config.Config_PositionConfig_GpsMode.DISABLED;
-    const writes = buildBoardWrites({ position: off }, plan());
+    const writes = buildBoardWrites({ position: off, lora: boardLora() }, plan());
     if (writes.position.payloadVariant.case !== "position") assert.fail("no position");
     assert.equal(writes.position.payloadVariant.value.gpsMode, Config.Config_PositionConfig_GpsMode.ENABLED);
   });
 
   it("sets the private primary channel with full precision", () => {
-    const writes = buildBoardWrites({ position: boardPosition() }, plan({ channelName: "  Team5 " }));
+    const writes = buildBoardWrites({ position: boardPosition(), lora: boardLora() }, plan({ channelName: "  Team5 " }));
     assert.equal(writes.channel.index, 0);
     assert.equal(writes.channel.role, Channel.Channel_Role.PRIMARY);
     assert.equal(writes.channel.settings?.name, "Team5");
@@ -74,7 +86,7 @@ describe("buildBoardWrites", () => {
   });
 
   it("turns on the OK button with no periodic message", () => {
-    const writes = buildBoardWrites({ position: boardPosition() }, plan({ okButtonPin: 5 }));
+    const writes = buildBoardWrites({ position: boardPosition(), lora: boardLora() }, plan({ okButtonPin: 5 }));
     assert.ok(writes.detection);
     if (writes.detection?.payloadVariant.case !== "detectionSensor") assert.fail("no detection sensor");
     const sensor = writes.detection.payloadVariant.value;
@@ -87,7 +99,19 @@ describe("buildBoardWrites", () => {
   });
 
   it("leaves the OK button alone when no pin is given", () => {
-    assert.equal(buildBoardWrites({ position: boardPosition() }, plan({ okButtonPin: null })).detection, null);
+    assert.equal(buildBoardWrites({ position: boardPosition(), lora: boardLora() }, plan({ okButtonPin: null })).detection, null);
+  });
+
+  it("sets the region, the team preset and transmit, and keeps the rest of the radio settings", () => {
+    const writes = buildBoardWrites({ position: boardPosition(), lora: boardLora() }, plan());
+    if (writes.lora.payloadVariant.case !== "lora") assert.fail("no lora");
+    const lora = writes.lora.payloadVariant.value;
+    assert.equal(lora.region, Config.Config_LoRaConfig_RegionCode.US);
+    assert.equal(lora.modemPreset, Config.Config_LoRaConfig_ModemPreset.LONG_FAST);
+    assert.equal(lora.usePreset, true);
+    assert.equal(lora.txEnabled, true);
+    assert.equal(lora.hopLimit, 3);
+    assert.equal(lora.txPower, 22);
   });
 
   it("refuses before the board's settings arrive", () => {
@@ -120,6 +144,7 @@ describe("differences", () => {
   it("lists what a stock board is missing and nothing once it matches", () => {
     const stock = summarize({
       position: boardPosition(),
+      lora: boardLora(),
       channel: create(Channel.ChannelSchema, {
         index: 0,
         settings: create(Channel.ChannelSettingsSchema, { name: "", psk: new Uint8Array([1]) }),
@@ -131,12 +156,15 @@ describe("differences", () => {
     assert.ok(found.some((item) => /precision/.test(item)));
     assert.ok(found.some((item) => /Smart position/.test(item)));
     assert.ok(found.some((item) => /OK button is off/.test(item)));
+    assert.ok(found.some((item) => /Region is not set/.test(item)));
 
-    const writes = buildBoardWrites({ position: boardPosition() }, plan());
+    const writes = buildBoardWrites({ position: boardPosition(), lora: boardLora() }, plan());
     if (writes.position.payloadVariant.case !== "position") assert.fail("no position");
     if (writes.detection?.payloadVariant.case !== "detectionSensor") assert.fail("no detection");
+    if (writes.lora.payloadVariant.case !== "lora") assert.fail("no lora");
     const done = summarize({
       position: writes.position.payloadVariant.value,
+      lora: writes.lora.payloadVariant.value,
       channel: writes.channel,
       detection: writes.detection.payloadVariant.value,
     });
@@ -197,12 +225,24 @@ describe("MeshLink.setUpBoard", () => {
       case: "config",
       value: create(Config.ConfigSchema, { payloadVariant: { case: "position", value: boardPosition() } }),
     });
+    push({
+      case: "config",
+      value: create(Config.ConfigSchema, { payloadVariant: { case: "lora", value: boardLora() } }),
+    });
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(events.some((event) => event.type === "board-settings" && event.settings.positionSecs === 900));
+    assert.ok(events.some((event) => event.type === "board-settings" && event.settings.region === 0));
 
     await link.setUpBoard(plan());
     const cases = admin.map((message) => message.payloadVariant.case);
-    assert.deepEqual(cases, ["beginEditSettings", "setConfig", "setChannel", "setModuleConfig", "commitEditSettings"]);
+    assert.deepEqual(cases, [
+      "beginEditSettings",
+      "setConfig",
+      "setConfig",
+      "setChannel",
+      "setModuleConfig",
+      "commitEditSettings",
+    ]);
     const setConfig = admin.find((message) => message.payloadVariant.case === "setConfig");
     if (setConfig?.payloadVariant.case !== "setConfig") assert.fail("no setConfig");
     const config = setConfig.payloadVariant.value;

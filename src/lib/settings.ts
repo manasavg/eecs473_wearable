@@ -87,6 +87,8 @@ export interface SavedTeam {
   keyBase64: string;
   positionSecs: number;
   okButtonPin: number | null;
+  /** LoRa region code. 1 is US. */
+  region: number;
 }
 
 export function loadTeam(): SavedTeam | null {
@@ -101,6 +103,7 @@ export function loadTeam(): SavedTeam | null {
       keyBase64: parsed.keyBase64,
       positionSecs: typeof parsed.positionSecs === "number" ? parsed.positionSecs : 30,
       okButtonPin: typeof parsed.okButtonPin === "number" ? parsed.okButtonPin : null,
+      region: typeof parsed.region === "number" && parsed.region > 0 ? parsed.region : 1,
     };
   } catch {
     return null;

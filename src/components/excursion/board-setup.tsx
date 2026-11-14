@@ -6,6 +6,11 @@ import {
   CHANNEL_NAME_MAX,
   DEFAULT_GPS_UPDATE_SECS,
   DEFAULT_POSITION_SECS,
+  DEFAULT_REGION,
+  REGIONS,
+  TEAM_PRESET,
+  presetName,
+  regionName,
   POSITION_SECS_MAX,
   POSITION_SECS_MIN,
   base64ToKey,
@@ -37,6 +42,7 @@ export function BoardSetup({
   const [keyText, setKeyText] = useState("");
   const [positionText, setPositionText] = useState(String(DEFAULT_POSITION_SECS));
   const [pinText, setPinText] = useState("");
+  const [region, setRegion] = useState<number>(DEFAULT_REGION);
   const [hasSavedTeam, setHasSavedTeam] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -47,6 +53,7 @@ export function BoardSetup({
       setKeyText(team.keyBase64);
       setPositionText(String(team.positionSecs));
       setPinText(team.okButtonPin == null ? "" : String(team.okButtonPin));
+      setRegion(team.region);
       setHasSavedTeam(true);
     } else {
       setKeyText(bytesToBase64(generateKey()));
@@ -61,6 +68,7 @@ export function BoardSetup({
         positionSecs: Number.parseInt(positionText, 10),
         gpsUpdateSecs: DEFAULT_GPS_UPDATE_SECS,
         okButtonPin: pinText.trim() === "" ? null : Number.parseInt(pinText, 10),
+        region,
       }
     : null;
   const problem = plan ? checkPlan(plan) : "The team key is not valid. Paste the team key or generate a new one.";
@@ -161,6 +169,25 @@ export function BoardSetup({
         </p>
 
         <label className="flex items-center gap-2">
+          <span className="w-36 text-sm text-neutral-600">Region</span>
+          <select
+            value={region}
+            className="h-11 border border-neutral-300 bg-white px-2"
+            onChange={(event) => setRegion(Number(event.target.value))}
+          >
+            {REGIONS.map((item) => (
+              <option key={item.code} value={item.code}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="text-sm text-neutral-600">
+          Use US in the United States. Every board must match. Setup also sets the {presetName(TEAM_PRESET)} preset.
+          {board?.region != null && ` This board: region ${regionName(board.region)}, preset ${presetName(board.modemPreset)}.`}
+        </p>
+
+        <label className="flex items-center gap-2">
           <span className="w-36 text-sm text-neutral-600">Position every</span>
           <input
             type="number"
@@ -209,6 +236,7 @@ export function BoardSetup({
               keyBase64: keyText.trim(),
               positionSecs: plan.positionSecs,
               okButtonPin: plan.okButtonPin,
+              region: plan.region,
             });
             setHasSavedTeam(true);
             void onSetUp(plan);

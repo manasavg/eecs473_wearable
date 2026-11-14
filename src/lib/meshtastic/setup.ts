@@ -10,6 +10,26 @@ export const DEFAULT_POSITION_SECS = 30;
 export const DEFAULT_GPS_UPDATE_SECS = 15;
 export const POSITION_SECS_MIN = 15;
 export const POSITION_SECS_MAX = 3600;
+/** Meshtastic's default preset, so a board that was never set up still matches. */
+export const TEAM_PRESET = Protobuf.Config.Config_LoRaConfig_ModemPreset.LONG_FAST;
+export const DEFAULT_REGION = Protobuf.Config.Config_LoRaConfig_RegionCode.US;
+
+/** Regions the setup screen offers, as Meshtastic names them. */
+export const REGIONS: Array<{ code: number; name: string }> = Object.entries(
+  Protobuf.Config.Config_LoRaConfig_RegionCode,
+)
+  .filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] !== 0)
+  .map(([name, code]) => ({ code, name }));
+
+export function regionName(code: number | null): string {
+  if (code == null) return "unknown";
+  return Protobuf.Config.Config_LoRaConfig_RegionCode[code] ?? String(code);
+}
+
+export function presetName(code: number | null): string {
+  if (code == null) return "unknown";
+  return Protobuf.Config.Config_LoRaConfig_ModemPreset[code] ?? String(code);
+}
 
 /** What "Set up this board" writes. The same plan goes on every board in the team. */
 export interface BoardPlan {
@@ -20,6 +40,8 @@ export interface BoardPlan {
   gpsUpdateSecs: number;
   /** GPIO for the OK button, or null to leave the Detection Sensor module alone. */
   okButtonPin: number | null;
+  /** LoRa region code. Every board must match, and UNSET keeps the radio off. */
+  region: number;
 }
 
 /** The settings that matter here, as the connected board reports them. */
@@ -33,6 +55,11 @@ export interface BoardSettings {
   /** Null when the Detection Sensor module is off. */
   okButtonPin: number | null;
   okButtonName: string | null;
+  /** LoRa region. 0 (UNSET) means the radio is off. */
+  region: number | null;
+  /** Preset in use, or null when the board uses custom radio settings. */
+  modemPreset: number | null;
+  txEnabled: boolean | null;
 }
 
 /** The board's own settings, read during configure. A write replaces a whole group, so these are the base. */
@@ -40,11 +67,13 @@ export interface CurrentBoardConfig {
   channel?: Protobuf.Channel.Channel;
   position?: Protobuf.Config.Config_PositionConfig;
   detection?: Protobuf.ModuleConfig.ModuleConfig_DetectionSensorConfig;
+  lora?: Protobuf.Config.Config_LoRaConfig;
 }
 
 export interface BoardWrites {
   channel: Protobuf.Channel.Channel;
   position: Protobuf.Config.Config;
+  lora: Protobuf.Config.Config;
   detection: Protobuf.ModuleConfig.ModuleConfig | null;
 }
 
@@ -54,7 +83,9 @@ export interface BoardWrites {
  * For position that zero value is GPS disabled, so every field not named here is copied from the board.
  */
 export function buildBoardWrites(current: CurrentBoardConfig, plan: BoardPlan): BoardWrites {
-  if (!current.position) throw new Error("Still reading this board's settings. Try again in a few seconds.");
+  if (!current.position || !current.lora) {
+    throw new Error("Still reading this board's settings. Try again in a few seconds.");
+  }
   const problem = checkPlan(plan);
   if (problem) throw new Error(problem);
 
@@ -86,6 +117,18 @@ export function buildBoardWrites(current: CurrentBoardConfig, plan: BoardPlan): 
     payloadVariant: { case: "position", value: positionConfig },
   });
 
+  // Same region and preset on every board, so they share one frequency. The frequency slot
+  // comes from the channel name, which is also the same on every board.
+  const loraConfig = clone(Protobuf.Config.Config_LoRaConfigSchema, current.lora);
+  loraConfig.region = plan.region;
+  loraConfig.usePreset = true;
+  loraConfig.modemPreset = TEAM_PRESET;
+  loraConfig.channelNum = 0;
+  loraConfig.txEnabled = true;
+  const lora = create(Protobuf.Config.ConfigSchema, {
+    payloadVariant: { case: "lora", value: loraConfig },
+  });
+
   let detection: Protobuf.ModuleConfig.ModuleConfig | null = null;
   if (plan.okButtonPin != null) {
     const sensor = current.detection
@@ -105,7 +148,7 @@ export function buildBoardWrites(current: CurrentBoardConfig, plan: BoardPlan): 
     });
   }
 
-  return { channel, position, detection };
+  return { channel, position, lora, detection };
 }
 
 /** A message for the first problem with a plan, or null when it is usable. */
@@ -119,6 +162,7 @@ export function checkPlan(plan: BoardPlan): string | null {
   if (!Number.isFinite(plan.positionSecs) || plan.positionSecs < POSITION_SECS_MIN || plan.positionSecs > POSITION_SECS_MAX) {
     return `Position interval must be ${POSITION_SECS_MIN}–${POSITION_SECS_MAX} s.`;
   }
+  if (!plan.region) return "Choose the region your boards are used in.";
   if (plan.okButtonPin != null && (!Number.isInteger(plan.okButtonPin) || plan.okButtonPin < 0 || plan.okButtonPin > 48)) {
     return "The OK button pin must be a GPIO number from 0 to 48.";
   }
@@ -148,13 +192,24 @@ export function summarize(current: CurrentBoardConfig): BoardSettings {
     gpsUpdateSecs: current.position ? current.position.gpsUpdateInterval : null,
     okButtonPin: sensor?.enabled ? sensor.monitorPin : null,
     okButtonName: sensor?.enabled ? sensor.name : null,
+    region: current.lora ? current.lora.region : null,
+    modemPreset: current.lora ? (current.lora.usePreset ? current.lora.modemPreset : null) : null,
+    txEnabled: current.lora ? current.lora.txEnabled : null,
   };
 }
 
 /** What still differs from the plan, in words. Empty when the board matches. */
 export function differences(board: BoardSettings, plan: BoardPlan): string[] {
   const out: string[] = [];
-  if (board.channelName == null || board.positionSecs == null) return ["Still reading this board's settings"];
+  if (board.channelName == null || board.positionSecs == null || board.region == null) {
+    return ["Still reading this board's settings"];
+  }
+  if (board.region === 0) out.push("Region is not set, so its radio is off");
+  else if (board.region !== plan.region) out.push(`Region is ${regionName(board.region)}`);
+  if (board.modemPreset !== TEAM_PRESET) {
+    out.push(board.modemPreset == null ? "Uses custom radio settings" : `Preset is ${presetName(board.modemPreset)}`);
+  }
+  if (board.txEnabled === false) out.push("Transmit is turned off");
   if (board.channelName !== plan.channelName.trim()) out.push(`Channel is "${board.channelName || "default"}"`);
   if (board.keyBase64 !== bytesToBase64(plan.key)) out.push("Channel key is not the team key");
   if (board.precisionBits !== FULL_PRECISION_BITS) out.push("Position precision is reduced");

@@ -97,8 +97,9 @@ export class MeshLink {
       this.emitBoardSettings();
     });
     this.device.events.onConfigPacket.subscribe((config: Protobuf.Config.Config) => {
-      if (config.payloadVariant.case !== "position") return;
-      this.boardConfig.position = config.payloadVariant.value;
+      if (config.payloadVariant.case === "position") this.boardConfig.position = config.payloadVariant.value;
+      else if (config.payloadVariant.case === "lora") this.boardConfig.lora = config.payloadVariant.value;
+      else return;
       this.emitBoardSettings();
     });
     this.device.events.onModuleConfigPacket.subscribe((config: Protobuf.ModuleConfig.ModuleConfig) => {
@@ -184,6 +185,7 @@ export class MeshLink {
     const writes = buildBoardWrites(this.boardConfig, plan);
     // setConfig opens the edit session. Everything after it is applied together on commit.
     await this.device.setConfig(writes.position);
+    await this.device.setConfig(writes.lora);
     await this.device.setChannel(writes.channel);
     if (writes.detection) await this.device.setModuleConfig(writes.detection);
     await this.device.commitEditSettings();
