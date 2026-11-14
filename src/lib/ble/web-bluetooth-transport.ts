@@ -1,5 +1,6 @@
 import { BROADCAST_ID } from "./constants";
 import { MeshLink } from "../meshtastic/link";
+import type { BoardPlan } from "../meshtastic/setup";
 import { viewToBytes } from "./protocol";
 import type { BleEvent, BleTransport } from "./transport";
 import type { AppCommand } from "./types";
@@ -110,6 +111,11 @@ export class WebBluetoothTransport implements BleTransport {
     this.detach();
     device?.gatt?.disconnect();
     this.emit({ type: "disconnected", unexpected: false });
+  }
+
+  async setUpBoard(plan: BoardPlan): Promise<void> {
+    if (!this.link) throw new Error("Connect a board first.");
+    await this.link.setUpBoard(plan);
   }
 
   async writeCommand(command: AppCommand): Promise<void> {

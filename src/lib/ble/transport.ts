@@ -1,5 +1,6 @@
 import type { FollowerInfo, LabSample, Status } from "./types";
 import type { AppCommand } from "./types";
+import type { BoardPlan, BoardSettings } from "../meshtastic/setup";
 
 /** One Heltec the phone can choose. Connecting makes that board the leader. */
 export interface BlePeer {
@@ -20,6 +21,8 @@ export type BleEvent =
   | { type: "follower"; info: FollowerInfo; lab?: LabSample }
   | { type: "alert"; deviceId: number; status: Status; uwbOutOfRange: boolean }
   | { type: "roster-cleared" }
+  /** The connected board's own channel, position, and OK button settings. */
+  | { type: "board-settings"; settings: BoardSettings }
   /** Any packet from a board the leader is tracking. */
   | { type: "heard"; id: number; at: number }
   /** A CHECK IN for this board reached the leader's send queue. */
@@ -59,5 +62,7 @@ export interface BleTransport {
   stopScan?(): Promise<void>;
   disconnect(): Promise<void>;
   writeCommand(command: AppCommand): Promise<void>;
+  /** Write the team settings to the connected board. Meshtastic links only. */
+  setUpBoard?(plan: BoardPlan): Promise<void>;
   subscribe(listener: (event: BleEvent) => void): () => void;
 }

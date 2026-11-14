@@ -91,7 +91,7 @@ The Alerts section has a setting, **Check-in needs an OK button press on the boa
 
 ### The OK button
 
-Stock Meshtastic can send a text when a pin changes, through its **Detection Sensor** module. Wire a push button from a free GPIO to GND on each follower, then set this in the Meshtastic app under **Module configuration → Detection Sensor**:
+Stock Meshtastic can send a text when a pin changes, through its **Detection Sensor** module. Wire a push button from a free GPIO to GND on each follower. Then enter that GPIO in Excursion's Board setup, or set this in the Meshtastic app under **Module configuration → Detection Sensor**:
 
 | Setting | Value |
 | --- | --- |
@@ -109,7 +109,7 @@ The module sends the text to the whole channel, which is another reason to use a
 
 ## Board settings
 
-Set these in the Meshtastic app on every board.
+The quickest way is **Board setup** in Excursion, below. The Meshtastic app works too. Every board needs these:
 
 | Setting | Why |
 | --- | --- |
@@ -117,6 +117,27 @@ Set these in the Meshtastic app on every board.
 | Position broadcast interval, shorter than the lost-contact limit | Otherwise a healthy board is flagged between reports. The default is minutes. |
 | Smart position: off, or minimum distance well below the range limit | Otherwise a board may not report until it moves farther than the limit |
 | Channel position precision: full | Reduced precision rounds positions to hundreds of meters or more |
+
+### Board setup in Excursion
+
+The Board setup section on the dashboard writes the settings above to the connected board in one step. It can only change the board the phone is connected to, so connect to each board in turn, including the leader, and tap **Set up this board**.
+
+| Field | Written to the board |
+| --- | --- |
+| Team channel name | Primary channel name (up to 11 characters) |
+| Team key | Primary channel key (AES-256). The first time, the app generates one. |
+| Position every | Position broadcast interval, 15–3600 s, default 30 s. Smart position off. GPS read every 15 s. |
+| OK button GPIO | Detection Sensor module, set up as in the OK button section. Blank leaves the module as it is. |
+
+It also sets full position precision and turns off MQTT uplink and downlink on the channel. Each write starts from the board's current settings, so the GPS pins, GPS mode and everything else not listed stay as they were. If GPS was disabled, it is turned on.
+
+The section compares the connected board with the team setup and lists what differs, so you can check each board after setup.
+
+The app saves the team setup on the phone. To set up boards from another phone, copy the team key and paste it there with the same channel name. Anyone with the key can join the channel. Making a new key means every board has to be set up again.
+
+Until every board is set up, boards still on the old channel do not hear the ones already moved. The board may restart to apply the settings, and the app reconnects.
+
+Reading the GPS every 15 s uses more battery than Meshtastic's default of 120 s.
 
 ## Phone in the background
 

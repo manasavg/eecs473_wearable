@@ -5,6 +5,7 @@ import { ExcursionAppClient, type AppState } from "@/lib/ble/app-client";
 import { isNativeShell } from "@/lib/ble/create-transport";
 import { rememberedNativeBeaconName } from "@/lib/ble/native-transport";
 import type { BlePeer } from "@/lib/ble/transport";
+import type { BoardPlan } from "@/lib/meshtastic/setup";
 import { rememberedBeaconName } from "@/lib/ble/web-bluetooth-transport";
 import { loadLastKnown, loadSettings, saveLastKnown, saveSettings } from "@/lib/settings";
 
@@ -129,8 +130,20 @@ export function useExcursion() {
     [client],
   );
 
+  const setUpBoard = useCallback(
+    async (plan: BoardPlan) => {
+      try {
+        await client.setUpBoard(plan);
+      } catch {
+        // The client stores the message on state.boardSetup.
+      }
+    },
+    [client],
+  );
+
   return {
     state,
+    setUpBoard,
     rememberedName,
     busy,
     peers,

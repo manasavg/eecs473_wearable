@@ -20,6 +20,7 @@ import {
   notifyOutOfRange,
   notifySilent,
 } from "@/lib/notify";
+import { BoardSetup } from "./board-setup";
 import { useCompass } from "./use-compass";
 import { useExcursion } from "./use-excursion";
 
@@ -390,6 +391,13 @@ export function ExcursionApp() {
               between reports. Both are saved on this phone.
             </p>
           </section>
+
+          <BoardSetup
+            board={state.board}
+            setup={state.boardSetup}
+            linked={linked}
+            onSetUp={app.setUpBoard}
+          />
 
           <section className="border-t border-neutral-200 pt-6">
             <h2 className="text-sm font-medium">Leader GPS</h2>

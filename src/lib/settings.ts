@@ -78,3 +78,39 @@ export function saveLastKnown(lastKnown: Record<number, LastKnown>): void {
     /* private mode */
   }
 }
+
+const TEAM_KEY = "excursion.team";
+
+/** The setup every board in the team gets. The key is base64. */
+export interface SavedTeam {
+  channelName: string;
+  keyBase64: string;
+  positionSecs: number;
+  okButtonPin: number | null;
+}
+
+export function loadTeam(): SavedTeam | null {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    const raw = localStorage.getItem(TEAM_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SavedTeam>;
+    if (typeof parsed.channelName !== "string" || typeof parsed.keyBase64 !== "string") return null;
+    return {
+      channelName: parsed.channelName,
+      keyBase64: parsed.keyBase64,
+      positionSecs: typeof parsed.positionSecs === "number" ? parsed.positionSecs : 30,
+      okButtonPin: typeof parsed.okButtonPin === "number" ? parsed.okButtonPin : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveTeam(team: SavedTeam): void {
+  try {
+    localStorage.setItem(TEAM_KEY, JSON.stringify(team));
+  } catch {
+    /* private mode */
+  }
+}

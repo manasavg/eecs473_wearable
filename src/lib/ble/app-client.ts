@@ -10,6 +10,7 @@ import { createTransport, type LinkMode } from "./create-transport";
 import { isFollowerOkSignal } from "./live-link";
 import { clampThreshold } from "./protocol";
 import type { BleEvent, BlePeer, BleTransport } from "./transport";
+import type { BoardPlan, BoardSettings } from "../meshtastic/setup";
 import { CmdType, Status, type FollowerInfo, type LabSample } from "./types";
 
 /**
@@ -105,6 +106,11 @@ export interface FollowerCheckIn {
   reason: string | null;
 }
 
+export interface BoardSetupState {
+  status: "idle" | "working" | "done" | "error";
+  message: string | null;
+}
+
 /** The newest valid GPS fix a board reported. Kept through fix loss, silence and reconnects. */
 export interface LastKnown {
   lat: number;
@@ -153,6 +159,9 @@ export interface AppState {
   silenceSeconds: number;
   /** A check-in needs someone to press OK on the board, not just the radio's acknowledgement. */
   requireConfirm: boolean;
+  /** The connected board's own settings, once it reports them. */
+  board: BoardSettings | null;
+  boardSetup: BoardSetupState;
   /** When this link came up. Silence counts from here for a board never heard. */
   connectedAt: number | null;
   members: MemberState[];
@@ -200,6 +209,8 @@ export function createInitialState(
     thresholdMeters: clampThreshold(thresholdMeters),
     silenceSeconds: clampSilence(silenceSeconds),
     requireConfirm,
+    board: null,
+    boardSetup: { status: "idle", message: null },
     connectedAt: null,
     members: [],
     alerts: [],
@@ -719,6 +730,9 @@ export class ExcursionAppClient {
       case "alert":
         this.triggerAlert(event.deviceId, event.status);
         return;
+      case "board-settings":
+        this.commit({ ...this.state, board: event.settings });
+        return;
       case "heard": {
         if (!this.state.followers.some((follower) => follower.id === event.id)) return;
         const followers = this.state.followers.map((follower) =>
@@ -922,6 +936,30 @@ export class ExcursionAppClient {
       ),
       { id: nextId(), at: now, kind: "answered", deviceId: id },
     );
+  }
+
+  /** Write the team settings to the connected board. */
+  async setUpBoard(plan: BoardPlan): Promise<void> {
+    const transport = this.transport;
+    if (!transport || this.state.connection !== "connected") {
+      throw new Error("Connect a board before setting it up.");
+    }
+    if (!transport.setUpBoard) throw new Error("This link cannot change board settings.");
+    this.commit({ ...this.state, boardSetup: { status: "working", message: null } });
+    try {
+      await transport.setUpBoard(plan);
+      this.commit({
+        ...this.state,
+        boardSetup: {
+          status: "done",
+          message: "Settings sent. If the board restarts, the app reconnects to it.",
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The board did not take the settings.";
+      this.commit({ ...this.state, boardSetup: { status: "error", message } });
+      throw error instanceof Error ? error : new Error(message);
+    }
   }
 
   /** When on, a check-in is OK only after someone presses the board's OK button. */

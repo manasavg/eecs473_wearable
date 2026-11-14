@@ -4,7 +4,7 @@ Leader phone app for identical Heltec boards: one leader and any number of follo
 
 Every Heltec runs Meshtastic firmware, flashed from https://flasher.meshtastic.org/ for the matching V4 or V4-R8 board. Use the same region and a private channel on every board. The phone lists nodes whose name starts with `Meshtastic`. The board you tap is the leader: the app reads that node's database for the others. Disconnect and tap a different board to swap.
 
-Before testing, set each board's position broadcast interval below the app's lost-contact limit (120 s by default). See the board settings in `PROTOCOL.md`.
+Before testing, connect to each board in turn and use **Board setup** in the app. It puts every board on the same private channel, sets position reports every 30 s, and turns on the OK button. See the board settings in `PROTOCOL.md`.
 
 The phone uses Meshtastic's own client. The Heltec V4 firmware already runs the SX1262 LoRa radio and the GPS port: GPIO 38 toward the GPS module, GPIO 39 toward the board, 9600 baud. Wire the NEO-6M there, with VCC to 5V and GND to GND. The antennas need a view of the sky.
 

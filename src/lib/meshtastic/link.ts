@@ -1,6 +1,7 @@
 import { fromBinary } from "@bufbuild/protobuf";
 import { MeshDevice, Protobuf } from "@meshtastic/core";
 import type { BleEvent } from "../ble/transport";
+import { buildBoardWrites, summarize, type BoardPlan, type CurrentBoardConfig } from "./setup";
 
 const FIRST_NODE = 4;
 const REAL_TIME_SEC = 1_600_000_000;
@@ -44,6 +45,8 @@ export class MeshLink {
   private readonly pending = new Map<number, number>();
   /** Set by the radio's echo of a text this phone just sent. */
   private echoedTextId: number | null = null;
+  /** The connected board's own settings, as configure reports them. */
+  private readonly boardConfig: CurrentBoardConfig = {};
 
   constructor(write: (bytes: Uint8Array) => Promise<void>, onEvent: (event: BleEvent) => void) {
     this.onEvent = onEvent;
@@ -81,6 +84,21 @@ export class MeshLink {
     });
     this.device.events.onNodeInfoPacket.subscribe((info: Protobuf.Mesh.NodeInfo) => {
       this.onNode(info);
+    });
+    this.device.events.onChannelPacket.subscribe((channel: Protobuf.Channel.Channel) => {
+      if (channel.index !== 0) return;
+      this.boardConfig.channel = channel;
+      this.emitBoardSettings();
+    });
+    this.device.events.onConfigPacket.subscribe((config: Protobuf.Config.Config) => {
+      if (config.payloadVariant.case !== "position") return;
+      this.boardConfig.position = config.payloadVariant.value;
+      this.emitBoardSettings();
+    });
+    this.device.events.onModuleConfigPacket.subscribe((config: Protobuf.ModuleConfig.ModuleConfig) => {
+      if (config.payloadVariant.case !== "detectionSensor") return;
+      this.boardConfig.detection = config.payloadVariant.value;
+      this.emitBoardSettings();
     });
     this.device.events.onMeshPacket.subscribe((packet: Protobuf.Mesh.MeshPacket) => {
       this.onMeshPacket(packet);
@@ -149,6 +167,24 @@ export class MeshLink {
       throw error;
     }
     return packetId;
+  }
+
+  /**
+   * Write the team channel, position reporting, and OK button to the connected board.
+   * Each write is built on the board's current settings. The board may reboot to apply them,
+   * which drops the Bluetooth link; the transport then reconnects.
+   */
+  async setUpBoard(plan: BoardPlan): Promise<void> {
+    const writes = buildBoardWrites(this.boardConfig, plan);
+    // setConfig opens the edit session. Everything after it is applied together on commit.
+    await this.device.setConfig(writes.position);
+    await this.device.setChannel(writes.channel);
+    if (writes.detection) await this.device.setModuleConfig(writes.detection);
+    await this.device.commitEditSettings();
+  }
+
+  private emitBoardSettings(): void {
+    this.emit({ type: "board-settings", settings: summarize(this.boardConfig) });
   }
 
   private whenWritten(): Promise<void> {
