@@ -67,6 +67,6 @@ export interface BleTransport {
   disconnect(): Promise<void>;
   writeCommand(command: AppCommand): Promise<void>;
   /** Write the team settings to the connected board. Meshtastic links only. */
-  setUpBoard?(plan: BoardPlan): Promise<void>;
+  setUpBoard?(plan: BoardPlan): Promise<"confirmed" | "restarting">;
   subscribe(listener: (event: BleEvent) => void): () => void;
 }

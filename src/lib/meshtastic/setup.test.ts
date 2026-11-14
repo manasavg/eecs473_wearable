@@ -172,68 +172,72 @@ describe("differences", () => {
   });
 });
 
-describe("MeshLink.setUpBoard", () => {
-  it("reads the board, writes position, channel and OK button, then commits", async () => {
-    const admin: Admin.AdminMessage[] = [];
-    const events: BleEvent[] = [];
-    let link: MeshLink | null = null;
-    link = new MeshLink(
-      async (bytes) => {
-        const toRadio = fromBinary(Mesh.ToRadioSchema, bytes);
-        if (toRadio.payloadVariant.case !== "packet") return;
-        const packet = toRadio.payloadVariant.value;
-        if (packet.payloadVariant.case !== "decoded") return;
-        if (packet.payloadVariant.value.portnum !== Portnums.PortNum.ADMIN_APP) return;
-        admin.push(fromBinary(Admin.AdminMessageSchema, packet.payloadVariant.value.payload));
-        // The board acknowledges each admin write from itself.
-        const ack = toBinary(
-          Mesh.RoutingSchema,
-          create(Mesh.RoutingSchema, { variant: { case: "errorReason", value: Mesh.Routing_Error.NONE } }),
+function simulatedBoard(refuse?: { step: string; error: number }) {
+  const admin: Admin.AdminMessage[] = [];
+  const events: BleEvent[] = [];
+  let link: MeshLink | null = null;
+  link = new MeshLink(
+    async (bytes) => {
+      const toRadio = fromBinary(Mesh.ToRadioSchema, bytes);
+      if (toRadio.payloadVariant.case !== "packet") return;
+      const packet = toRadio.payloadVariant.value;
+      if (packet.payloadVariant.case !== "decoded") return;
+      if (packet.payloadVariant.value.portnum !== Portnums.PortNum.ADMIN_APP) return;
+      const message = fromBinary(Admin.AdminMessageSchema, packet.payloadVariant.value.payload);
+      admin.push(message);
+      const error = refuse && message.payloadVariant.case === refuse.step ? refuse.error : Mesh.Routing_Error.NONE;
+      // The board answers each admin write from itself.
+      const reply = toBinary(Mesh.RoutingSchema, create(Mesh.RoutingSchema, { variant: { case: "errorReason", value: error } }));
+      setTimeout(() => {
+        link?.push(
+          toBinary(
+            Mesh.FromRadioSchema,
+            create(Mesh.FromRadioSchema, {
+              payloadVariant: {
+                case: "packet",
+                value: create(Mesh.MeshPacketSchema, {
+                  from: 0x11,
+                  to: 0x11,
+                  id: 1,
+                  payloadVariant: {
+                    case: "decoded",
+                    value: create(Mesh.DataSchema, {
+                      portnum: Portnums.PortNum.ROUTING_APP,
+                      requestId: packet.id,
+                      payload: reply,
+                    }),
+                  },
+                }),
+              },
+            }),
+          ),
         );
-        setTimeout(() => {
-          link?.push(
-            toBinary(
-              Mesh.FromRadioSchema,
-              create(Mesh.FromRadioSchema, {
-                payloadVariant: {
-                  case: "packet",
-                  value: create(Mesh.MeshPacketSchema, {
-                    from: 0x11,
-                    to: 0x11,
-                    id: 1,
-                    payloadVariant: {
-                      case: "decoded",
-                      value: create(Mesh.DataSchema, {
-                        portnum: Portnums.PortNum.ROUTING_APP,
-                        requestId: packet.id,
-                        payload: ack,
-                      }),
-                    },
-                  }),
-                },
-              }),
-            ),
-          );
-        }, 5);
-      },
-      (event) => events.push(event),
-    );
-    const push = (payloadVariant: Mesh.FromRadio["payloadVariant"]) =>
-      link?.push(toBinary(Mesh.FromRadioSchema, create(Mesh.FromRadioSchema, { payloadVariant })));
-    push({ case: "myInfo", value: create(Mesh.MyNodeInfoSchema, { myNodeNum: 0x11 }) });
-    push({
-      case: "config",
-      value: create(Config.ConfigSchema, { payloadVariant: { case: "position", value: boardPosition() } }),
-    });
-    push({
-      case: "config",
-      value: create(Config.ConfigSchema, { payloadVariant: { case: "lora", value: boardLora() } }),
-    });
+      }, 5);
+    },
+    (event) => events.push(event),
+  );
+  const push = (payloadVariant: Mesh.FromRadio["payloadVariant"]) =>
+    link?.push(toBinary(Mesh.FromRadioSchema, create(Mesh.FromRadioSchema, { payloadVariant })));
+  push({ case: "myInfo", value: create(Mesh.MyNodeInfoSchema, { myNodeNum: 0x11 }) });
+  push({
+    case: "config",
+    value: create(Config.ConfigSchema, { payloadVariant: { case: "position", value: boardPosition() } }),
+  });
+  push({
+    case: "config",
+    value: create(Config.ConfigSchema, { payloadVariant: { case: "lora", value: boardLora() } }),
+  });
+  return { link, admin, events };
+}
+
+describe("MeshLink.setUpBoard", () => {
+  it("reads the board, writes position, radio, channel and OK button, then commits", async () => {
+    const { link, admin, events } = simulatedBoard();
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(events.some((event) => event.type === "board-settings" && event.settings.positionSecs === 900));
     assert.ok(events.some((event) => event.type === "board-settings" && event.settings.region === 0));
 
-    await link.setUpBoard(plan());
+    assert.equal(await link.setUpBoard(plan()), "confirmed");
     const cases = admin.map((message) => message.payloadVariant.case);
     assert.deepEqual(cases, [
       "beginEditSettings",
@@ -249,5 +253,11 @@ describe("MeshLink.setUpBoard", () => {
     if (config.payloadVariant.case !== "position") assert.fail("not position");
     assert.equal(config.payloadVariant.value.rxGpio, 39);
     assert.equal(config.payloadVariant.value.positionBroadcastSecs, 30);
+  });
+
+  it("says which step the board refused and why", async () => {
+    const { link } = simulatedBoard({ step: "setChannel", error: Mesh.Routing_Error.NOT_AUTHORIZED });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await assert.rejects(() => link.setUpBoard(plan()), /did not accept the team channel: Not delivered \(NOT_AUTHORIZED\)/);
   });
 });

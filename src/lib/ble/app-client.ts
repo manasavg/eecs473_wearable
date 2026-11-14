@@ -1079,16 +1079,19 @@ export class ExcursionAppClient {
     if (!transport.setUpBoard) throw new Error("This link cannot change board settings.");
     this.commit({ ...this.state, boardSetup: { status: "working", message: null } });
     try {
-      await transport.setUpBoard(plan);
+      const result = await transport.setUpBoard(plan);
       this.commit({
         ...this.state,
         boardSetup: {
           status: "done",
-          message: "Settings sent. If the board restarts, the app reconnects to it.",
+          message:
+            result === "confirmed"
+              ? "The board saved the settings. If it restarts, the app reconnects to it."
+              : "Settings sent. The board is restarting to apply them. Once the app reconnects, check that Board setup says this board matches the team.",
         },
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "The board did not take the settings.";
+      const message = error instanceof Error ? error.message : `The board did not take the settings (${String(error)}).`;
       this.commit({ ...this.state, boardSetup: { status: "error", message } });
       throw error instanceof Error ? error : new Error(message);
     }

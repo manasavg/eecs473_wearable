@@ -113,9 +113,9 @@ export class WebBluetoothTransport implements BleTransport {
     this.emit({ type: "disconnected", unexpected: false });
   }
 
-  async setUpBoard(plan: BoardPlan): Promise<void> {
+  async setUpBoard(plan: BoardPlan): Promise<"confirmed" | "restarting"> {
     if (!this.link) throw new Error("Connect a board first.");
-    await this.link.setUpBoard(plan);
+    return this.link.setUpBoard(plan);
   }
 
   async writeCommand(command: AppCommand): Promise<void> {

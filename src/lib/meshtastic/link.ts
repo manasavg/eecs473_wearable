@@ -181,14 +181,24 @@ export class MeshLink {
    * Each write is built on the board's current settings. The board may reboot to apply them,
    * which drops the Bluetooth link; the transport then reconnects.
    */
-  async setUpBoard(plan: BoardPlan): Promise<void> {
+  async setUpBoard(plan: BoardPlan): Promise<"confirmed" | "restarting"> {
     const writes = buildBoardWrites(this.boardConfig, plan);
     // setConfig opens the edit session. Everything after it is applied together on commit.
-    await this.device.setConfig(writes.position);
-    await this.device.setConfig(writes.lora);
-    await this.device.setChannel(writes.channel);
-    if (writes.detection) await this.device.setModuleConfig(writes.detection);
-    await this.device.commitEditSettings();
+    await setupStep("position settings", this.device.setConfig(writes.position));
+    await setupStep("radio region and preset", this.device.setConfig(writes.lora));
+    await setupStep("team channel", this.device.setChannel(writes.channel));
+    if (writes.detection) await setupStep("OK button", this.device.setModuleConfig(writes.detection));
+    // Changing the region makes the board restart to apply it, and it may restart before it
+    // acknowledges the commit. A missing answer here is not a failure: the app reconnects
+    // and Board setup shows whether the board now matches.
+    try {
+      await withTimeout(this.device.commitEditSettings(), COMMIT_WAIT_MS);
+      return "confirmed";
+    } catch (error) {
+      const code = routingErrorCode(error);
+      if (code == null || NO_ANSWER_ERRORS.has(code)) return "restarting";
+      throw new Error(`The board refused to save the settings (${routingErrorText(code)}).`);
+    }
   }
 
   private emitBoardSettings(): void {
@@ -394,6 +404,43 @@ function readFix(position: Protobuf.Mesh.Position): { fix: boolean; lat: number 
   const lon = lonI / 1e7;
   if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return { fix: false, lat: null, lon: null };
   return { fix: true, lat, lon };
+}
+
+/** How long each settings write may take before setup reports which one failed. */
+const SETUP_STEP_MS = 20_000;
+const COMMIT_WAIT_MS = 10_000;
+
+/** Run one settings write. Meshtastic rejects with a plain object, so turn that into a readable error. */
+async function setupStep(what: string, sending: Promise<number>): Promise<void> {
+  try {
+    await withTimeout(sending, SETUP_STEP_MS);
+  } catch (error) {
+    const code = routingErrorCode(error);
+    if (code != null) {
+      throw new Error(`The board did not accept the ${what}: ${routingErrorText(code)}.`);
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`The board did not accept the ${what}: ${detail}.`);
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject({ error: Protobuf.Mesh.Routing_Error.TIMEOUT }),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function routingErrorCode(error: unknown): number | null {
