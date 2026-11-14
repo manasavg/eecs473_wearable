@@ -95,7 +95,8 @@ export class MeshLink {
     this.device.events.onMessagePacket.subscribe((packet: { from: number; data: string }) => {
       const from = packet.from >>> 0;
       if (from === this.myNode || from < FIRST_NODE) return;
-      const text = packet.data.replace(/\0+$/, "").trim();
+      // Drop control characters, such as the bell the Detection Sensor module can add.
+      const text = packet.data.replace(/[\u0000-\u001f\u007f]/g, "").trim();
       if (!text) return;
       const ok = text.toUpperCase() === "OK" || text.toUpperCase().startsWith("OK ");
       this.emit(live({ text, okId: ok ? from : null }));

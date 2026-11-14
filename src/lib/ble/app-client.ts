@@ -75,7 +75,20 @@ export interface ActivityEntry {
   message?: string;
 }
 
-export type CheckInStatus = "sending" | "waiting" | "ok" | "noAnswer" | "failed";
+/**
+ * sending → waiting → received → ok.
+ * received: the board's radio acknowledged it; nobody has pressed OK yet.
+ * ok: someone pressed the OK button (or the radio acknowledged, when no press is required).
+ * unconfirmed: the board received it, but nobody pressed OK in time.
+ */
+export type CheckInStatus =
+  | "sending"
+  | "waiting"
+  | "received"
+  | "ok"
+  | "unconfirmed"
+  | "noAnswer"
+  | "failed";
 
 /** The latest CHECK IN sent to one board. */
 export interface FollowerCheckIn {
@@ -83,7 +96,11 @@ export interface FollowerCheckIn {
   sentAt: number;
   /** Meshtastic packet id, once the leader queued it. */
   packetId: number | null;
+  /** When the board's radio acknowledged it. */
+  receivedAt: number | null;
   answeredAt: number | null;
+  /** "person" when someone pressed OK, "radio" when the acknowledgement alone counted. */
+  confirmedBy: "person" | "radio" | null;
   /** Why it failed, for No answer and failed. */
   reason: string | null;
 }
@@ -134,6 +151,8 @@ export interface AppState {
   thresholdMeters: number;
   /** Flag a follower that has been silent this long. */
   silenceSeconds: number;
+  /** A check-in needs someone to press OK on the board, not just the radio's acknowledgement. */
+  requireConfirm: boolean;
   /** When this link came up. Silence counts from here for a board never heard. */
   connectedAt: number | null;
   members: MemberState[];
@@ -170,6 +189,7 @@ export interface AppState {
 export function createInitialState(
   thresholdMeters = DEFAULT_THRESHOLD_M,
   silenceSeconds = DEFAULT_SILENCE_S,
+  requireConfirm = true,
 ): AppState {
   return {
     mode: "idle",
@@ -179,6 +199,7 @@ export function createInitialState(
     leaderBatteryPercent: null,
     thresholdMeters: clampThreshold(thresholdMeters),
     silenceSeconds: clampSilence(silenceSeconds),
+    requireConfirm,
     connectedAt: null,
     members: [],
     alerts: [],
@@ -232,12 +253,18 @@ function markSilence(
   });
 }
 
-/** Turn a check-in that has waited too long into No answer. */
+/** Turn a check-in that has waited too long into No answer, or No OK pressed if the board got it. */
 function expireCheckIns(followers: TrackedFollower[], now: number): TrackedFollower[] {
   return followers.map((follower) => {
     const checkIn = follower.checkIn;
-    if (!checkIn || (checkIn.status !== "sending" && checkIn.status !== "waiting")) return follower;
-    if (now - checkIn.sentAt <= CHECK_IN_TIMEOUT_MS) return follower;
+    if (!checkIn || now - checkIn.sentAt <= CHECK_IN_TIMEOUT_MS) return follower;
+    if (checkIn.status === "received") {
+      return {
+        ...follower,
+        checkIn: { ...checkIn, status: "unconfirmed", reason: "The board got it, but nobody pressed OK" },
+      };
+    }
+    if (checkIn.status !== "sending" && checkIn.status !== "waiting") return follower;
     return { ...follower, checkIn: { ...checkIn, status: "noAnswer", reason: "No answer" } };
   });
 }
@@ -350,13 +377,22 @@ export class ExcursionAppClient {
   private readonly now: () => number;
   private readonly remembered = new Map<number, LastKnown>();
 
-  constructor(initial?: { thresholdMeters?: number; silenceSeconds?: number; now?: () => number }) {
-    this.state = createInitialState(initial?.thresholdMeters, initial?.silenceSeconds);
+  constructor(initial?: {
+    thresholdMeters?: number;
+    silenceSeconds?: number;
+    requireConfirm?: boolean;
+    now?: () => number;
+  }) {
+    this.state = createInitialState(
+      initial?.thresholdMeters,
+      initial?.silenceSeconds,
+      initial?.requireConfirm ?? true,
+    );
     this.now = initial?.now ?? Date.now;
   }
 
   private fresh(): AppState {
-    return createInitialState(this.state.thresholdMeters, this.state.silenceSeconds);
+    return createInitialState(this.state.thresholdMeters, this.state.silenceSeconds, this.state.requireConfirm);
   }
 
   /** Appendix C: update_ui — the dashboard subscribes instead of polling. */
@@ -566,7 +602,17 @@ export class ExcursionAppClient {
       followers = upsertTracked(
         followers,
         id,
-        { checkIn: { status: "sending", sentAt, packetId: null, answeredAt: null, reason: null } },
+        {
+          checkIn: {
+            status: "sending",
+            sentAt,
+            packetId: null,
+            receivedAt: null,
+            answeredAt: null,
+            confirmedBy: null,
+            reason: null,
+          },
+        },
         this.state.thresholdMeters,
       );
     }
@@ -695,14 +741,15 @@ export class ExcursionAppClient {
         );
         return;
       case "checkin-ack":
-        this.answerCheckIn(event.id, event.packetId);
+        this.receiveCheckIn(event.id, event.packetId);
         return;
       case "checkin-failed":
         this.commit(
           projectFollowers(
             this.state,
             patchCheckIn(this.state.followers, event.id, (checkIn) =>
-              checkIn.packetId === event.packetId && checkIn.status !== "ok"
+              checkIn.packetId === event.packetId &&
+              (checkIn.status === "sending" || checkIn.status === "waiting")
                 ? { ...checkIn, status: event.noAnswer ? "noAnswer" : "failed", reason: event.reason }
                 : null,
             ),
@@ -786,7 +833,7 @@ export class ExcursionAppClient {
           followerOk ? { id: nextId(), at: now, kind: "answered" } : undefined,
         );
         // An OK text from a board counts as its answer, but only to a check-in still open.
-        if (followerOk && event.okId != null) this.answerCheckIn(event.okId, null);
+        if (followerOk && event.okId != null) this.confirmCheckIn(event.okId);
         return;
       }
       default:
@@ -820,27 +867,67 @@ export class ExcursionAppClient {
     );
   }
 
-  /** Mark a board's open check-in OK. A null packet id matches any open check-in. */
-  private answerCheckIn(id: number, packetId: number | null): void {
+  /**
+   * The board's own radio acknowledged this packet. That proves the board got it,
+   * not that anyone saw it, so it is OK only when no button press is required.
+   * A late acknowledgement still counts after No answer was shown.
+   */
+  private receiveCheckIn(id: number, packetId: number): void {
     const now = this.now();
-    const target = this.state.followers.find((follower) => follower.id === id);
-    const checkIn = target?.checkIn;
-    // A real acknowledgement or OK reply still counts after No answer was shown.
+    const checkIn = this.state.followers.find((follower) => follower.id === id)?.checkIn;
+    if (!checkIn || checkIn.packetId !== packetId) return;
+    if (checkIn.status !== "sending" && checkIn.status !== "waiting" && checkIn.status !== "noAnswer") return;
+    if (!this.state.requireConfirm) {
+      this.finishCheckIn(id, "radio", now);
+      return;
+    }
+    const late = now - checkIn.sentAt > CHECK_IN_TIMEOUT_MS;
+    this.commit(
+      projectFollowers(
+        this.state,
+        patchCheckIn(this.state.followers, id, (current) => ({
+          ...current,
+          status: late ? "unconfirmed" : "received",
+          receivedAt: now,
+          reason: late ? "The board got it, but nobody pressed OK" : null,
+        })),
+        now,
+      ),
+    );
+  }
+
+  /**
+   * Someone on that board sent OK, normally by pressing its OK button.
+   * Counts for any check-in still open, even one already shown as No answer.
+   */
+  private confirmCheckIn(id: number): void {
+    const checkIn = this.state.followers.find((follower) => follower.id === id)?.checkIn;
     if (!checkIn || checkIn.status === "ok") return;
-    if (packetId != null && checkIn.packetId !== packetId) return;
+    this.finishCheckIn(id, "person", this.now());
+  }
+
+  private finishCheckIn(id: number, by: "person" | "radio", now: number): void {
     this.commit(
       projectFollowers(
         this.state,
         patchCheckIn(this.state.followers, id, (current) => ({
           ...current,
           status: "ok",
+          receivedAt: current.receivedAt ?? (by === "radio" ? now : null),
           answeredAt: now,
+          confirmedBy: by,
           reason: null,
         })),
         now,
       ),
       { id: nextId(), at: now, kind: "answered", deviceId: id },
     );
+  }
+
+  /** When on, a check-in is OK only after someone presses the board's OK button. */
+  setRequireConfirm(requireConfirm: boolean): void {
+    if (requireConfirm === this.state.requireConfirm) return;
+    this.commit({ ...this.state, requireConfirm });
   }
 
   dismissError(): void {

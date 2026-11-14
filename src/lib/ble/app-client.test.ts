@@ -357,7 +357,10 @@ describe("ExcursionAppClient", () => {
     transport.emit({ type: "checkin-ack", id: 0xa3, packetId: 76 });
     assert.equal(card()?.checkIn?.status, "waiting");
     transport.emit({ type: "checkin-ack", id: 0xa3, packetId: 77 });
+    assert.equal(card()?.checkIn?.status, "received");
+    transport.emit({ type: "live", counter: null, text: "OK detected", hex: "", okId: 0xa3 });
     assert.equal(card()?.checkIn?.status, "ok");
+    assert.equal(card()?.checkIn?.confirmedBy, "person");
     await client.disconnect();
   });
 
@@ -526,6 +529,53 @@ describe("ExcursionAppClient", () => {
     });
     assert.equal(client.getState().followers[0]?.lastKnown?.lat, 42.281);
     assert.equal(client.getLastKnown()[0xa3]?.lat, 42.281);
+    await client.disconnect();
+  });
+
+  it("shows No OK pressed when the board got it but nobody pressed OK", async () => {
+    const time = clock();
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ now: time.now });
+    await client.connectDevice("beacon", transport);
+    followerAt(transport, 0xa3, 42.28, time.now());
+    await client.sendCheckIn(0xa3);
+    transport.emit({ type: "checkin-sent", id: 0xa3, packetId: 5 });
+    transport.emit({ type: "checkin-ack", id: 0xa3, packetId: 5 });
+    time.advance(121_000);
+    client.tick();
+    const checkIn = () => client.getState().followers[0]?.checkIn;
+    assert.equal(checkIn()?.status, "unconfirmed");
+    // A press that comes late still counts.
+    transport.emit({ type: "live", counter: null, text: "OK", hex: "", okId: 0xa3 });
+    assert.equal(checkIn()?.status, "ok");
+    assert.equal(checkIn()?.confirmedBy, "person");
+    await client.disconnect();
+  });
+
+  it("counts the radio acknowledgement as OK when no press is required", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ requireConfirm: false });
+    await client.connectDevice("beacon", transport);
+    followerAt(transport, 0xa3, 42.28, Date.now());
+    await client.sendCheckIn(0xa3);
+    transport.emit({ type: "checkin-sent", id: 0xa3, packetId: 9 });
+    transport.emit({ type: "checkin-ack", id: 0xa3, packetId: 9 });
+    const checkIn = client.getState().followers[0]?.checkIn;
+    assert.equal(checkIn?.status, "ok");
+    assert.equal(checkIn?.confirmedBy, "radio");
+    await client.disconnect();
+  });
+
+  it("ignores a radio failure that arrives after the board received it", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    followerAt(transport, 0xa3, 42.28, Date.now());
+    await client.sendCheckIn(0xa3);
+    transport.emit({ type: "checkin-sent", id: 0xa3, packetId: 3 });
+    transport.emit({ type: "checkin-ack", id: 0xa3, packetId: 3 });
+    transport.emit({ type: "checkin-failed", id: 0xa3, packetId: 3, noAnswer: true, reason: "No answer" });
+    assert.equal(client.getState().followers[0]?.checkIn?.status, "received");
     await client.disconnect();
   });
 });

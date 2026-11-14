@@ -24,6 +24,7 @@ export function useExcursion() {
     const saved = loadSettings();
     client.setThreshold(saved.thresholdMeters);
     client.setSilenceSeconds(saved.silenceSeconds);
+    client.setRequireConfirm(saved.requireConfirm);
     client.rememberLastKnown(loadLastKnown());
   }, [client]);
 
@@ -114,11 +115,16 @@ export function useExcursion() {
 
   /** Save the range and silence limits on the phone. They apply right away. */
   const saveLimits = useCallback(
-    (meters: number, silenceSeconds: number) => {
+    (meters: number, silenceSeconds: number, requireConfirm: boolean) => {
       client.setThreshold(meters);
       client.setSilenceSeconds(silenceSeconds);
+      client.setRequireConfirm(requireConfirm);
       const next = client.getState();
-      saveSettings({ thresholdMeters: next.thresholdMeters, silenceSeconds: next.silenceSeconds });
+      saveSettings({
+        thresholdMeters: next.thresholdMeters,
+        silenceSeconds: next.silenceSeconds,
+        requireConfirm: next.requireConfirm,
+      });
     },
     [client],
   );

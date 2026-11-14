@@ -183,4 +183,30 @@ describe("MeshLink", () => {
     );
     await assert.rejects(() => link.sendCheckIn(0xa3), /GATT write failed/);
   });
+
+  it("reads a Detection Sensor OK press with its bell character as OK", async () => {
+    const { link, events } = await listen();
+    link.push(fromRadio({ case: "myInfo", value: create(Mesh.MyNodeInfoSchema, { myNodeNum: 0x11 }) }));
+    link.push(
+      fromRadio({
+        case: "packet",
+        value: create(Mesh.MeshPacketSchema, {
+          from: 0xa3,
+          to: 0xffffffff,
+          id: 4321,
+          payloadVariant: {
+            case: "decoded",
+            value: create(Mesh.DataSchema, {
+              portnum: Portnums.PortNum.TEXT_MESSAGE_APP,
+              payload: new TextEncoder().encode("\u0007OK detected"),
+            }),
+          },
+        }),
+      }),
+    );
+    await settle();
+    const ok = events.find((event) => event.type === "live" && event.okId === 0xa3);
+    assert.ok(ok && ok.type === "live");
+    assert.equal(ok.text, "OK detected");
+  });
 });

@@ -73,15 +73,39 @@ Each follower card has its own Check in button. Check in all sends one to every 
 | --- | --- |
 | Sending | The phone is writing it to the leader |
 | Waiting | The leader queued it, with this packet id |
-| OK | That follower's own radio acknowledged this packet id, or it replied `OK` or `OK ...` |
-| No answer | The radio gave up retrying, or 120 s passed with no answer |
+| Received | That follower's own radio acknowledged this packet id. Nobody has pressed OK yet. |
+| OK · pressed | Someone pressed the OK button on that board |
+| No OK pressed | The board received it, but nobody pressed OK within 120 s |
+| No answer | The radio gave up retrying, or 120 s passed with no acknowledgement |
 | Not delivered | The radio refused it, for example no route or over the airtime limit |
 
-An acknowledgement from the leader itself does not count. That only means another radio repeated the message. An `OK` text counts only while that board has a check-in open. A real answer that arrives after No answer still turns the card OK.
+An acknowledgement from the leader itself does not count. That only means another radio repeated the message.
 
-The phone sends a notification when a check-in ends as No answer or Not delivered.
+A press is any text from that board that is `OK` or starts with `OK `, such as `OK detected` from the button below. It counts only while that board has a check-in open, and a late press still turns the card OK. Presses with no open check-in are ignored.
 
-An OK means the follower's radio received the message. It does not mean the person saw it. The stock firmware has no button to confirm.
+The phone sends a notification when a check-in ends as No OK pressed, No answer, or Not delivered.
+
+### Not requiring a press
+
+The Alerts section has a setting, **Check-in needs an OK button press on the board**, on by default and saved on the phone. Turn it off for boards without a button. Then the radio's acknowledgement alone shows OK · received, which means the board got the message, not that a person saw it.
+
+### The OK button
+
+Stock Meshtastic can send a text when a pin changes, through its **Detection Sensor** module. Wire a push button from a free GPIO to GND on each follower, then set this in the Meshtastic app under **Module configuration → Detection Sensor**:
+
+| Setting | Value |
+| --- | --- |
+| Enabled | On |
+| Monitor pin | The GPIO the button is wired to |
+| Friendly name | `OK`, so the message is `OK detected` |
+| Trigger type | Falling edge or logic low (the button pulls the pin to GND) |
+| Use pull-up | On |
+| Minimum broadcast interval | Short, for example 5 s, so a second press is not dropped |
+| State broadcast interval | 0 (off), so the board never sends `OK` without a press |
+
+Do not use a pin the board already uses: not the LoRa radio's pins, not GPIO 38 or 39 (GPS), and not the PRG button (GPIO 0), which Meshtastic uses itself. Check the Heltec V4 pinout for a free pin. Setting names can vary slightly between firmware versions. Test one press with the Meshtastic app open on the leader before relying on it: an `OK detected` message should appear.
+
+The module sends the text to the whole channel, which is another reason to use a private channel.
 
 ## Board settings
 

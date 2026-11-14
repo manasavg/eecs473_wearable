@@ -66,6 +66,7 @@ export function ExcursionApp() {
   const [nativeShell, setNativeShell] = useState(false);
   const [rangeDraft, setRangeDraft] = useState(String(state.thresholdMeters));
   const [silenceDraft, setSilenceDraft] = useState(String(state.silenceSeconds));
+  const [confirmDraft, setConfirmDraft] = useState(state.requireConfirm);
   const [looked, setLooked] = useState(false);
   const seen = useRef<Record<number, { out: boolean; silent: boolean; checkIn: CheckInStatus | null }>>({});
 
@@ -82,6 +83,10 @@ export function ExcursionApp() {
   useEffect(() => {
     setSilenceDraft(String(state.silenceSeconds));
   }, [state.silenceSeconds]);
+
+  useEffect(() => {
+    setConfirmDraft(state.requireConfirm);
+  }, [state.requireConfirm]);
 
   // Notify once each time a follower goes out of range, goes silent, or misses a check-in.
   useEffect(() => {
@@ -101,7 +106,10 @@ export function ExcursionApp() {
             follower.lastKnown ? lastKnownSummary(follower.lastKnown, Date.now()) : null,
           );
         }
-        if ((checkIn === "noAnswer" || checkIn === "failed") && previous.checkIn !== checkIn) {
+        if (
+          (checkIn === "noAnswer" || checkIn === "failed" || checkIn === "unconfirmed") &&
+          previous.checkIn !== checkIn
+        ) {
           void notifyNoAnswer(who, follower.checkIn?.reason ?? "No answer");
         }
       }
@@ -117,8 +125,12 @@ export function ExcursionApp() {
   const asked = followers.filter((follower) => follower.checkIn);
   const answered = asked.filter((follower) => follower.checkIn?.status === "ok");
   const missed = asked.filter(
-    (follower) => follower.checkIn?.status === "noAnswer" || follower.checkIn?.status === "failed",
+    (follower) =>
+      follower.checkIn?.status === "noAnswer" ||
+      follower.checkIn?.status === "failed" ||
+      follower.checkIn?.status === "unconfirmed",
   );
+  const received = asked.filter((follower) => follower.checkIn?.status === "received");
   const checkInSummary =
     asked.length === 0
       ? "Not sent"
@@ -127,8 +139,10 @@ export function ExcursionApp() {
           ? `${followerLabel(answered[0])} is OK`
           : `All ${asked.length} OK`
         : missed.length > 0
-          ? `${answered.length} of ${asked.length} OK · ${missed.length} no answer`
-          : `${answered.length} of ${asked.length} OK · waiting`;
+          ? `${answered.length} of ${asked.length} OK · ${missed.length} not OK`
+          : received.length > 0
+            ? `${answered.length} of ${asked.length} OK · waiting for OK press`
+            : `${answered.length} of ${asked.length} OK · waiting`;
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-4 py-6">
@@ -269,8 +283,10 @@ export function ExcursionApp() {
               {followers.length > 1 ? `Check in all ${followers.length}` : "Check in"}
             </button>
             <p className="mt-2 text-sm text-neutral-600">
-              Sends CHECK IN to each follower. To ask one board, use the button on its card. A board shows OK
-              when it confirms it got the message, or when it replies OK.
+              Sends CHECK IN to each follower. To ask one board, use the button on its card.{" "}
+              {state.requireConfirm
+                ? "A board shows Received when its radio gets the message, and OK once someone presses its OK button."
+                : "A board shows OK when its radio gets the message, or when someone presses its OK button."}
             </p>
           </section>
 
@@ -324,7 +340,7 @@ export function ExcursionApp() {
                 const seconds = Number.parseInt(silenceDraft, 10);
                 if (!Number.isFinite(meters) || !Number.isFinite(seconds)) return;
                 void ensureNotifyPermission();
-                app.saveLimits(meters, seconds);
+                app.saveLimits(meters, seconds, confirmDraft);
               }}
             >
               <label className="flex items-center gap-2">
@@ -354,6 +370,15 @@ export function ExcursionApp() {
                   onChange={(event) => setSilenceDraft(event.target.value)}
                 />
                 <span className="text-sm text-neutral-600">s</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="h-5 w-5"
+                  checked={confirmDraft}
+                  onChange={(event) => setConfirmDraft(event.target.checked)}
+                />
+                <span className="text-sm text-neutral-600">Check-in needs an OK button press on the board</span>
               </label>
               <button type="submit" className="h-11 border border-black bg-black px-4 text-white">
                 Save
@@ -405,8 +430,14 @@ function checkInText(follower: TrackedFollower, now: number): string {
       return "Sending…";
     case "waiting":
       return `Waiting · sent ${ago(checkIn.sentAt, now)}`;
+    case "received":
+      return `Received · waiting for OK press`;
     case "ok":
-      return `OK · ${ago(checkIn.answeredAt, now)}`;
+      return checkIn.confirmedBy === "person"
+        ? `OK · pressed ${ago(checkIn.answeredAt, now)}`
+        : `OK · received ${ago(checkIn.answeredAt, now)}`;
+    case "unconfirmed":
+      return `No OK pressed · received ${ago(checkIn.receivedAt, now)}`;
     case "noAnswer":
       return `No answer · sent ${ago(checkIn.sentAt, now)}`;
     case "failed":
@@ -447,7 +478,7 @@ function FollowerCard({
   const label = followerLabel(follower);
   const alarm = follower.outOfRange || follower.silent;
   const status = follower.checkIn?.status;
-  const busy = status === "sending" || status === "waiting";
+  const busy = status === "sending" || status === "waiting" || status === "received";
 
   return (
     <article className={`border px-3 py-3 ${alarm ? "border-red-700" : "border-neutral-200"}`}>
@@ -507,8 +538,10 @@ function FollowerCard({
           className={`text-sm ${
             status === "ok"
               ? "text-green-700"
-              : status === "noAnswer" || status === "failed"
+              : status === "noAnswer" || status === "failed" || status === "unconfirmed"
                 ? "text-red-700"
+                : status === "received"
+                  ? "text-amber-700"
                 : "text-neutral-600"
           }`}
         >

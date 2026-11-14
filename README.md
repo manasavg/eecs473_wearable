@@ -8,7 +8,7 @@ Before testing, set each board's position broadcast interval below the app's los
 
 The phone uses Meshtastic's own client. The Heltec V4 firmware already runs the SX1262 LoRa radio and the GPS port: GPIO 38 toward the GPS module, GPIO 39 toward the board, 9600 baud. Wire the NEO-6M there, with VCC to 5V and GND to GND. The antennas need a view of the sky.
 
-Check-in uses Meshtastic text. A board shows OK when its own radio acknowledges the message or it replies OK. The red LED on a far board is not part of stock Meshtastic.
+Check-in uses Meshtastic text. A board shows Received when its own radio acknowledges the message, and OK once someone presses the OK button wired to it. See the OK button section in `PROTOCOL.md`. The red LED on a far board is not part of stock Meshtastic.
 
 ## Run
 

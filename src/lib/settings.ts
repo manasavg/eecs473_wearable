@@ -7,11 +7,16 @@ const KEY = "excursion.settings";
 export interface SavedSettings {
   thresholdMeters: number;
   silenceSeconds: number;
+  requireConfirm: boolean;
 }
 
 /** The range and silence limits from the last session on this phone. */
 export function loadSettings(): SavedSettings {
-  const fallback = { thresholdMeters: DEFAULT_THRESHOLD_M, silenceSeconds: DEFAULT_SILENCE_S };
+  const fallback = {
+    thresholdMeters: DEFAULT_THRESHOLD_M,
+    silenceSeconds: DEFAULT_SILENCE_S,
+    requireConfirm: true,
+  };
   try {
     if (typeof localStorage === "undefined") return fallback;
     const raw = localStorage.getItem(KEY);
@@ -26,6 +31,8 @@ export function loadSettings(): SavedSettings {
         typeof parsed.silenceSeconds === "number"
           ? clampSilence(parsed.silenceSeconds)
           : fallback.silenceSeconds,
+      requireConfirm:
+        typeof parsed.requireConfirm === "boolean" ? parsed.requireConfirm : fallback.requireConfirm,
     };
   } catch {
     return fallback;
