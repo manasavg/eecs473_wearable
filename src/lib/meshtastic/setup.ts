@@ -172,11 +172,42 @@ export function checkPlan(plan: BoardPlan): string | null {
   return null;
 }
 
-/** Pins the stock firmware already drives on the Heltec V4. Not a complete pinout: check before wiring. */
+/**
+ * Pins the Heltec V3/V4 or the ESP32-S3 already use. Not a complete pinout: check the V4 pinout before wiring.
+ * Likely free on the header: 2, 4, 5, 6, 7, 40, 41, 42, 47, 48.
+ */
 const RESERVED_PINS = new Map<number, string>([
   [0, "PRG button"],
+  [1, "battery sense"],
+  [3, "an ESP32-S3 boot pin"],
+  [8, "LoRa radio"],
+  [9, "LoRa radio"],
+  [10, "LoRa radio"],
+  [11, "LoRa radio"],
+  [12, "LoRa radio"],
+  [13, "LoRa radio"],
+  [14, "LoRa radio"],
+  [17, "the screen"],
+  [18, "the screen"],
+  [19, "USB"],
+  [20, "USB"],
+  [21, "the screen"],
+  [26, "flash memory"],
+  [27, "flash memory"],
+  [28, "flash memory"],
+  [29, "flash memory"],
+  [30, "flash memory"],
+  [31, "flash memory"],
+  [32, "flash memory"],
+  [33, "PSRAM on R8 boards"],
+  [34, "PSRAM on R8 boards"],
+  [35, "the LED"],
+  [36, "board power control"],
+  [37, "PSRAM on R8 boards"],
   [38, "GPS"],
   [39, "GPS"],
+  [45, "an ESP32-S3 boot pin"],
+  [46, "an ESP32-S3 boot pin"],
 ]);
 
 /** The parts of the board's settings the setup screen compares against the team plan. */

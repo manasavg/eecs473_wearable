@@ -661,6 +661,11 @@ function FollowerCard({
             ? "No fix"
             : "—"}
       </p>
+      {follower.lastText && (
+        <p className="mt-2 text-sm text-neutral-600">
+          Last message: &ldquo;{follower.lastText.text}&rdquo; · {ago(follower.lastText.at, now)}
+        </p>
+      )}
       {follower.placeholder && (
         <p className="mt-1 text-sm text-neutral-600">
           In your group, but the leader has not heard it on the radio. Check that it is on, has its antenna, and

@@ -103,7 +103,7 @@ Each follower card has its own Check in button. Check in all sends one to every 
 
 An acknowledgement from the leader itself does not count. That only means another radio repeated the message.
 
-A press is any text from that board that is `OK` or starts with `OK `, such as `OK detected` from the button below. It counts only while that board has a check-in open, and a late press still turns the card OK. Presses with no open check-in are ignored.
+A press is any text from that board with the word `OK` in it, such as `OK detected` from the button below. Each card shows the last message its board sent, so you can see what a press actually sends. It counts only while that board has a check-in open, and a late press still turns the card OK. Presses with no open check-in are ignored.
 
 The phone sends a notification when a check-in ends as No OK pressed, No answer, or Not delivered.
 
@@ -125,7 +125,14 @@ Stock Meshtastic can send a text when a pin changes, through its **Detection Sen
 | Minimum broadcast interval | Short, for example 5 s, so a second press is not dropped |
 | State broadcast interval | 0 (off), so the board never sends `OK` without a press |
 
-Do not use a pin the board already uses: not the LoRa radio's pins, not GPIO 38 or 39 (GPS), and not the PRG button (GPIO 0), which Meshtastic uses itself. Check the Heltec V4 pinout for a free pin. Setting names can vary slightly between firmware versions. Test one press with the Meshtastic app open on the leader before relying on it: an `OK detected` message should appear.
+Do not use a pin the board already uses. Board setup refuses the ones it knows: GPIO 0 (PRG button), 1, 3, 8–14 (LoRa radio), 17, 18, 21 (screen), 19, 20 (USB), 26–37 (flash, PSRAM, LED, power), 38, 39 (GPS), 45, 46. Pins likely free on the header: 2, 4, 5, 6, 7, 40, 41, 42, 47, 48.
+
+If a press does nothing:
+
+1. Set up the follower itself with the pin. Board setup changes only the board the phone is connected to. Connected to the follower, Board setup should not list "OK button is off".
+2. Power the follower off and on, so the module starts watching the pin.
+3. Check that the button joins the pin to GND when pressed. With a meter, the pin reads about 3.3 V released and 0 V pressed.
+4. Send a check-in, press, and look for a "Last message" line on that board's card. If it is there but the card stays Received, the message has no "OK" in it; tell us what it says. Check the Heltec V4 pinout for a free pin. Setting names can vary slightly between firmware versions. Test one press with the Meshtastic app open on the leader before relying on it: an `OK detected` message should appear.
 
 The module sends the text to the whole channel, which is another reason to use a private channel.
 

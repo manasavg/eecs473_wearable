@@ -53,6 +53,8 @@ export type BleEvent =
         positionAt?: number | null;
       } | null;
       separation?: { id?: number; known: boolean; meters: number | null } | null;
+      /** The board that sent `text`, when known. */
+      fromId?: number | null;
       /** Set when a follower LoRa OK includes that board's id. */
       okId?: number | null;
       /** The leader dropped this follower after it stopped answering. */

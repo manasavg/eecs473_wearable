@@ -126,6 +126,8 @@ describe("checkPlan", () => {
     assert.match(checkPlan(plan({ positionSecs: 5 })) ?? "", /Position interval/);
     assert.match(checkPlan(plan({ okButtonPin: 38 })) ?? "", /GPS/);
     assert.match(checkPlan(plan({ okButtonPin: 0 })) ?? "", /PRG/);
+    assert.match(checkPlan(plan({ okButtonPin: 9 })) ?? "", /LoRa/);
+    assert.equal(checkPlan(plan({ okButtonPin: 47 })), null);
     assert.equal(checkPlan(plan()), null);
   });
 });

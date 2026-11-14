@@ -166,6 +166,8 @@ export interface TrackedFollower {
   silent: boolean;
   checkIn: FollowerCheckIn | null;
   lastKnown: LastKnown | null;
+  /** The last text this board sent, such as its OK button message. */
+  lastText: { text: string; at: number } | null;
   /** A group member not heard on the radio yet. Its id is not a real node number. */
   placeholder: boolean;
 }
@@ -327,6 +329,7 @@ function emptyFollower(member: GroupMember): TrackedFollower {
     silent: false,
     checkIn: null,
     lastKnown: null,
+    lastText: null,
     placeholder: true,
   };
 }
@@ -407,7 +410,7 @@ function latest(a: number | null, b: number | null | undefined): number | null {
 function upsertTracked(
   followers: TrackedFollower[],
   id: number,
-  patch: Partial<Omit<TrackedFollower, "id" | "outOfRange" | "silent">>,
+  patch: Partial<Omit<TrackedFollower, "id" | "outOfRange" | "silent" | "placeholder">>,
   thresholdMeters: number,
 ): TrackedFollower[] {
   const previous = followers.find((follower) => follower.id === id);
@@ -426,6 +429,7 @@ function upsertTracked(
     silent: previous?.silent ?? false,
     checkIn: patch.checkIn !== undefined ? patch.checkIn : (previous?.checkIn ?? null),
     lastKnown: previous?.lastKnown ?? null,
+    lastText: patch.lastText !== undefined ? patch.lastText : (previous?.lastText ?? null),
     placeholder: false,
   };
   next.outOfRange = isOutOfRange(next.separationKnown, next.separationM, thresholdMeters);
@@ -942,6 +946,14 @@ export class ExcursionAppClient {
               separationKnown: event.separation.known,
               separationM: event.separation.meters,
             },
+            this.state.thresholdMeters,
+          );
+        }
+        if (event.text && event.fromId != null && followers.some((item) => item.id === event.fromId)) {
+          followers = upsertTracked(
+            followers,
+            event.fromId,
+            { lastText: { text: event.text, at: now } },
             this.state.thresholdMeters,
           );
         }

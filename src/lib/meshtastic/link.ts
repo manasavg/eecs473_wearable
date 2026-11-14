@@ -123,8 +123,7 @@ export class MeshLink {
       // Drop control characters, such as the bell the Detection Sensor module can add.
       const text = packet.data.replace(/[\u0000-\u001f\u007f]/g, "").trim();
       if (!text) return;
-      const ok = text.toUpperCase() === "OK" || text.toUpperCase().startsWith("OK ");
-      this.emit(live({ text, okId: ok ? from : null }));
+      this.emit(live({ text, fromId: from, okId: isOkText(text) ? from : null }));
     });
   }
 
@@ -441,6 +440,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
       },
     );
   });
+}
+
+/** An OK press: the word OK anywhere, such as "OK detected" from the Detection Sensor module. */
+export function isOkText(text: string): boolean {
+  return /\bOK\b/i.test(text);
 }
 
 function routingErrorCode(error: unknown): number | null {
