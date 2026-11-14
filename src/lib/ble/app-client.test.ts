@@ -596,11 +596,12 @@ describe("ExcursionAppClient", () => {
     const client = new ExcursionAppClient();
     await client.connectDevice("beacon", transport);
     client.setGroup([
-      { id: 0x11, name: "Leader" },
-      { id: 0xa3, name: "A3" },
+      { suffix: "0011", name: "Leader" },
+      { suffix: "a688", name: "Meshtastic_a688" },
     ]);
     transport.emit({ type: "my-node", id: 0x11 });
-    assert.deepEqual(client.getState().followers.map((item) => item.id), [0xa3]);
+    followerAt(transport, 0x9e2ca688, 42.28, Date.now());
+    assert.deepEqual(client.getState().followers.map((item) => item.id), [0x9e2ca688]);
     await client.disconnect();
   });
 
@@ -608,14 +609,20 @@ describe("ExcursionAppClient", () => {
     const time = clock();
     const transport = new ScriptedTransport();
     const client = new ExcursionAppClient({ now: time.now, silenceSeconds: 60 });
-    client.setGroup([{ id: 0xa3, name: "Ana" }]);
+    client.setGroup([{ suffix: "19e8", name: "Meshtastic_19e8" }]);
     await client.connectDevice("beacon", transport);
-    const card = () => client.getState().followers.find((item) => item.id === 0xa3);
-    assert.equal(card()?.name, "Ana");
+    const card = () => client.getState().followers.find((item) => item.name === "Meshtastic_19e8");
+    assert.equal(card()?.placeholder, true);
     assert.equal(card()?.lastHeardAt, null);
+    await assert.rejects(() => client.sendCheckIn(card()!.id), /not been heard/);
     time.advance(61_000);
     client.tick();
     assert.equal(card()?.silent, true);
+    // Once the radio hears it, the real board replaces the stand-in.
+    followerAt(transport, 0x7a1219e8, 42.28, time.now());
+    const ids = client.getState().followers.map((item) => item.id);
+    assert.deepEqual(ids, [0x7a1219e8]);
+    assert.equal(client.getState().followers[0]?.placeholder, false);
     await client.disconnect();
   });
 
@@ -623,7 +630,7 @@ describe("ExcursionAppClient", () => {
     const transport = new ScriptedTransport();
     const client = new ExcursionAppClient({ thresholdMeters: 40 });
     await client.connectDevice("beacon", transport);
-    client.setGroup([{ id: 0xa3, name: "A3" }]);
+    client.setGroup([{ suffix: "00a3", name: "A3" }]);
     transport.emit({ type: "live", counter: null, text: null, hex: "", gps: { fix: true, lat: 42.28, lon: -83.74 } });
     followerAt(transport, 0xa3, 42.2801, Date.now());
     followerAt(transport, 0x77, 42.29, Date.now());
@@ -633,5 +640,15 @@ describe("ExcursionAppClient", () => {
     const checkIns = transport.commands.filter((command) => command.type === CmdType.CHECK_IN);
     assert.deepEqual(checkIns.map((command) => command.targetId), [0xa3]);
     await client.disconnect();
+  });
+
+  it("reads the 4 hex digits from a Meshtastic Bluetooth name", async () => {
+    const { peerSuffix, nodeSuffix } = await import("./app-client.ts");
+    assert.equal(peerSuffix("Meshtastic_a688"), "a688");
+    assert.equal(peerSuffix("Meshtastic_19E8"), "19e8");
+    assert.equal(peerSuffix("Trail lead_0c3f"), "0c3f");
+    assert.equal(peerSuffix("Meshtastic"), null);
+    assert.equal(nodeSuffix(0x9e2ca688), "a688");
+    assert.equal(nodeSuffix(0x000019e8), "19e8");
   });
 });

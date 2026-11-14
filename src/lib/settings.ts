@@ -1,5 +1,5 @@
 import { DEFAULT_SILENCE_S, DEFAULT_THRESHOLD_M, clampSilence } from "./ble/constants";
-import type { GroupMember, LastKnown } from "./ble/app-client";
+import { nodeSuffix, type GroupMember, type LastKnown } from "./ble/app-client";
 import { clampThreshold } from "./ble/protocol";
 
 const KEY = "excursion.settings";
@@ -126,10 +126,20 @@ export function loadGroup(): GroupMember[] {
     if (typeof localStorage === "undefined") return [];
     const raw = localStorage.getItem(GROUP_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as Array<Partial<GroupMember>>;
-    return parsed
-      .filter((item): item is GroupMember => typeof item?.id === "number" && typeof item?.name === "string")
-      .map((item) => ({ id: item.id >>> 0, name: item.name }));
+    const parsed = JSON.parse(raw) as Array<{ suffix?: unknown; id?: unknown; name?: unknown }>;
+    const out: GroupMember[] = [];
+    for (const item of parsed) {
+      const name = typeof item?.name === "string" ? item.name : "";
+      // Earlier versions saved the full node number.
+      const suffix =
+        typeof item?.suffix === "string"
+          ? item.suffix.toLowerCase()
+          : typeof item?.id === "number"
+            ? nodeSuffix(item.id)
+            : null;
+      if (suffix && /^[0-9a-f]{4}$/.test(suffix)) out.push({ suffix, name });
+    }
+    return out;
   } catch {
     return [];
   }

@@ -43,9 +43,11 @@ Use a private channel with its own key. On a shared or default channel, any stra
 
 The group is the list of your team's boards, saved on the phone. Include every board, the leader too, so any board can lead.
 
+- On the iPhone, the board list on the connect screen has a checkbox on each board. Tick your team's boards, then tap **Make leader** on one. Boards in the group that the scan did not find still show, so they can be unticked. Making a board leader adds it to the group when a group exists.
+- Bluetooth shows only the last 4 hex digits of a board's node number (`Meshtastic_a688`), so members are matched by those digits. Two of your own boards would need the same 4 digits to clash.
 - With no group, every board heard is a follower. **Make these boards the group** adds the leader and every board shown.
 - With a group, only members are followers. Other boards heard go under **Other boards nearby**, with an **Add to group** button. They get no alerts and no check-ins.
-- A member not heard yet still has a card that says not heard yet. After the lost-contact time it is flagged as lost, so a board that never shows up is not missed.
+- A member not heard yet still has a card that says not heard yet, with no Check in button. After the lost-contact time it is flagged as lost, so a board that never shows up is not missed.
 - **Remove** on a card takes that board out of the group.
 - The connected board is never listed as a follower. If it is not in the group, the app offers to add it.
 

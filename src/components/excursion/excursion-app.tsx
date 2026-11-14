@@ -8,7 +8,15 @@ import {
   THRESHOLD_MAX_M,
   THRESHOLD_MIN_M,
 } from "@/lib/ble/constants";
-import { isInGroup, type CheckInStatus, type LastKnown, type TrackedFollower } from "@/lib/ble/app-client";
+import {
+  isInGroup,
+  nodeSuffix,
+  peerSuffix,
+  type CheckInStatus,
+  type GroupMember,
+  type LastKnown,
+  type TrackedFollower,
+} from "@/lib/ble/app-client";
 import { isNativeShell } from "@/lib/ble/create-transport";
 import { webBluetoothAvailable } from "@/lib/ble/web-bluetooth-transport";
 import { bearingDegrees, cardinalLabel, guideCue, haversineMeters, relativeBearing } from "@/lib/geo";
@@ -125,9 +133,23 @@ export function ExcursionApp() {
   const followers = state.followers.filter((follower) => isInGroup(state, follower.id));
   const others = grouped ? state.followers.filter((follower) => !isInGroup(state, follower.id)) : [];
   const leaderInGroup = state.leaderId == null || isInGroup(state, state.leaderId);
-  const addToGroup = (items: Array<{ id: number; name: string }>) =>
-    app.setGroup([...state.group, ...items.filter((item) => !state.group.some((member) => member.id === item.id))]);
-  const removeFromGroup = (id: number) => app.setGroup(state.group.filter((member) => member.id !== id));
+  const addToGroup = (items: Array<{ id: number; name: string }>) => {
+    const added: GroupMember[] = items.map((item) => ({ suffix: nodeSuffix(item.id), name: item.name }));
+    app.setGroup([...state.group, ...added.filter((item) => !state.group.some((member) => member.suffix === item.suffix))]);
+  };
+  const removeFromGroup = (id: number) =>
+    app.setGroup(state.group.filter((member) => member.suffix !== nodeSuffix(id)));
+  const groupHas = (suffix: string | null) => suffix != null && state.group.some((member) => member.suffix === suffix);
+  const toggleGroup = (suffix: string, name: string) =>
+    app.setGroup(
+      groupHas(suffix)
+        ? state.group.filter((member) => member.suffix !== suffix)
+        : [...state.group, { suffix, name }],
+    );
+  // Saved members the scan has not found, so they can still be unticked.
+  const unseenMembers = state.group.filter(
+    (member) => !app.peers.some((peer) => peerSuffix(peer.name) === member.suffix),
+  );
   const outFollowers = followers.filter((follower) => follower.outOfRange && !follower.silent);
   const silentFollowers = followers.filter((follower) => follower.silent);
   const asked = followers.filter((follower) => follower.checkIn);
@@ -184,24 +206,66 @@ export function ExcursionApp() {
               {app.scanning && app.peers.length === 0 && (
                 <p className="text-sm text-neutral-600">Looking for Meshtastic boards…</p>
               )}
-              {app.peers.length > 0 && (
-                <ul className="flex flex-col gap-2">
-                  {app.peers.map((peer) => (
-                    <li key={peer.deviceId}>
-                      <button
-                        type="button"
-                        className="flex h-14 w-full items-center justify-between border border-neutral-300 bg-white px-3 text-left disabled:opacity-40"
-                        disabled={app.busy}
-                        onClick={() => void app.connectPeer(peer)}
-                      >
-                        <span className="font-medium">{peer.name}</span>
-                        <span className="text-sm text-neutral-600">
-                          {app.busy ? "Connecting" : "Make leader"}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+              {(app.peers.length > 0 || state.group.length > 0) && (
+                <>
+                  <p className="text-sm text-neutral-600">
+                    Tick every board in your group, the leader too. Boards not ticked are hidden once you connect.
+                    Then tap Make leader on the board to connect to.
+                  </p>
+                  <ul className="flex flex-col gap-2">
+                    {app.peers.map((peer) => {
+                      const suffix = peerSuffix(peer.name);
+                      return (
+                        <li key={peer.deviceId} className="flex h-14 items-stretch border border-neutral-300 bg-white">
+                          <label className="flex flex-1 items-center gap-3 px-3">
+                            <input
+                              type="checkbox"
+                              className="h-5 w-5"
+                              disabled={suffix == null}
+                              checked={groupHas(suffix)}
+                              onChange={() => suffix && toggleGroup(suffix, peer.name)}
+                              aria-label={`${peer.name} is in the group`}
+                            />
+                            <span className="font-medium">{peer.name}</span>
+                          </label>
+                          <button
+                            type="button"
+                            className="border-l border-neutral-300 px-3 text-sm text-neutral-700 disabled:opacity-40"
+                            disabled={app.busy}
+                            onClick={() => {
+                              if (suffix && state.group.length > 0 && !groupHas(suffix)) {
+                                toggleGroup(suffix, peer.name);
+                              }
+                              void app.connectPeer(peer);
+                            }}
+                          >
+                            {app.busy ? "Connecting" : "Make leader"}
+                          </button>
+                        </li>
+                      );
+                    })}
+                    {unseenMembers.map((member) => (
+                      <li key={member.suffix} className="flex h-14 items-center border border-dashed border-neutral-300 px-3">
+                        <label className="flex flex-1 items-center gap-3">
+                          <input
+                            type="checkbox"
+                            className="h-5 w-5"
+                            checked
+                            onChange={() => toggleGroup(member.suffix, member.name)}
+                            aria-label={`${member.name} is in the group`}
+                          />
+                          <span>{member.name}</span>
+                        </label>
+                        <span className="text-sm text-neutral-500">{app.scanning ? "looking" : "not found"}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-sm text-neutral-600">
+                    {state.group.length === 0
+                      ? "No group yet: every board heard will show."
+                      : `Group: ${state.group.length} board${state.group.length === 1 ? "" : "s"}.`}
+                  </p>
+                </>
               )}
               {looked && !app.scanning && app.peers.length === 0 && !app.scanError && (
                 <p className="text-sm text-neutral-600">
@@ -597,6 +661,12 @@ function FollowerCard({
             ? "No fix"
             : "—"}
       </p>
+      {follower.placeholder && (
+        <p className="mt-1 text-sm text-neutral-600">
+          In your group, but the leader has not heard it on the radio. Check that it is on, has its antenna, and
+          matches in Board setup (region, channel).
+        </p>
+      )}
       {follower.silent && follower.separationKnown === true && (
         <p className="text-sm text-neutral-600">Last known distance. The board may have moved.</p>
       )}
@@ -652,7 +722,7 @@ function FollowerCard({
         <button
           type="button"
           className="h-10 shrink-0 border border-black bg-white px-3 text-sm disabled:opacity-40"
-          disabled={!linked || busy}
+          disabled={!linked || busy || follower.placeholder}
           onClick={onCheckIn}
         >
           Check in

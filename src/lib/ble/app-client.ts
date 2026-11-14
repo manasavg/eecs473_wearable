@@ -106,15 +106,32 @@ export interface FollowerCheckIn {
   reason: string | null;
 }
 
-/** A board the team owns. Saved on the phone. */
+/**
+ * A board the team owns. Saved on the phone.
+ * Bluetooth shows only the last 4 hex digits of a board's node number ("Meshtastic_a688"),
+ * so members are matched by those digits.
+ */
 export interface GroupMember {
-  id: number;
+  suffix: string;
   name: string;
+}
+
+/** The last 4 hex digits of a node number, as Meshtastic puts in its Bluetooth name. */
+export function nodeSuffix(id: number): string {
+  return ((id >>> 0) & 0xffff).toString(16).padStart(4, "0");
+}
+
+/** The 4 hex digits at the end of a Bluetooth name such as "Meshtastic_a688", or null. */
+export function peerSuffix(name: string): string | null {
+  const match = /[_\s]([0-9a-f]{4})$/i.exec(name.trim());
+  return match ? match[1].toLowerCase() : null;
 }
 
 /** With an empty group every board heard is shown. Otherwise only members are followers. */
 export function isInGroup(state: Pick<AppState, "group">, id: number): boolean {
-  return state.group.length === 0 || state.group.some((member) => member.id === id);
+  if (state.group.length === 0) return true;
+  const suffix = nodeSuffix(id);
+  return state.group.some((member) => member.suffix === suffix);
 }
 
 export interface BoardSetupState {
@@ -149,6 +166,8 @@ export interface TrackedFollower {
   silent: boolean;
   checkIn: FollowerCheckIn | null;
   lastKnown: LastKnown | null;
+  /** A group member not heard on the radio yet. Its id is not a real node number. */
+  placeholder: boolean;
 }
 
 /** What the flashed ESP32 sketch is sending right now. */
@@ -273,18 +292,30 @@ function projectFollowers(state: AppState, followers: TrackedFollower[], now: nu
  * so a missing board shows up as missing instead of not at all.
  */
 function withRoster(followers: TrackedFollower[], state: AppState): TrackedFollower[] {
-  const list = state.leaderId == null ? followers : followers.filter((item) => item.id !== state.leaderId);
+  const real = followers.filter((item) => !item.placeholder && item.id !== state.leaderId);
+  const leaderSuffix = state.leaderId == null ? null : nodeSuffix(state.leaderId);
   const missing = state.group.filter(
-    (member) => member.id !== state.leaderId && !list.some((item) => item.id === member.id),
+    (member) => member.suffix !== leaderSuffix && !real.some((item) => nodeSuffix(item.id) === member.suffix),
   );
-  if (missing.length === 0) return list;
-  return [...list, ...missing.map((member) => emptyFollower(member.id, member.name))].sort((a, b) => a.id - b.id);
+  const kept = followers.filter(
+    (item) => item.placeholder && missing.some((member) => placeholderId(member.suffix) === item.id),
+  );
+  const added = missing
+    .filter((member) => !kept.some((item) => item.id === placeholderId(member.suffix)))
+    .map((member) => emptyFollower(member));
+  if (kept.length + added.length === 0 && real.length === followers.length) return followers;
+  return [...real, ...kept, ...added].sort((a, b) => a.id - b.id);
 }
 
-function emptyFollower(id: number, name: string | null): TrackedFollower {
+/** Stand-in id for a member not heard yet. Real node numbers are far larger than 0xffff. */
+function placeholderId(suffix: string): number {
+  return Number.parseInt(suffix, 16);
+}
+
+function emptyFollower(member: GroupMember): TrackedFollower {
   return {
-    id,
-    name,
+    id: placeholderId(member.suffix),
+    name: member.name,
     fix: null,
     lat: null,
     lon: null,
@@ -296,6 +327,7 @@ function emptyFollower(id: number, name: string | null): TrackedFollower {
     silent: false,
     checkIn: null,
     lastKnown: null,
+    placeholder: true,
   };
 }
 
@@ -394,6 +426,7 @@ function upsertTracked(
     silent: previous?.silent ?? false,
     checkIn: patch.checkIn !== undefined ? patch.checkIn : (previous?.checkIn ?? null),
     lastKnown: previous?.lastKnown ?? null,
+    placeholder: false,
   };
   next.outOfRange = isOutOfRange(next.separationKnown, next.separationM, thresholdMeters);
   return [...followers.filter((follower) => follower.id !== id), next].sort((a, b) => a.id - b.id);
@@ -460,7 +493,13 @@ export class ExcursionAppClient {
 
   /** Replace the team's boards. Members not heard yet get an empty card. */
   setGroup(group: GroupMember[]): void {
-    const unique = [...new Map(group.map((member) => [member.id >>> 0, { ...member, id: member.id >>> 0 }])).values()];
+    const unique = [
+      ...new Map(
+        group
+          .filter((member) => /^[0-9a-f]{4}$/i.test(member.suffix))
+          .map((member) => [member.suffix.toLowerCase(), { ...member, suffix: member.suffix.toLowerCase() }]),
+      ).values(),
+    ];
     const next = { ...this.state, group: unique };
     const now = this.now();
     const followers = updateLastKnown(withRoster(this.state.followers, next), this.remembered, now);
@@ -655,11 +694,14 @@ export class ExcursionAppClient {
     const targets =
       targetId === BROADCAST_ID
         ? this.state.followers
-            .filter((follower) => isInGroup(this.state, follower.id))
+            .filter((follower) => !follower.placeholder && isInGroup(this.state, follower.id))
             .map((follower) => follower.id)
-        : this.state.followers.some((follower) => follower.id === targetId)
+        : this.state.followers.some((follower) => follower.id === targetId && !follower.placeholder)
           ? [targetId]
           : [];
+    if (this.state.followers.some((follower) => follower.id === targetId && follower.placeholder)) {
+      throw new Error("That board has not been heard on the radio yet.");
+    }
     if (targets.length > 0) {
       await this.sendTrackedCheckIns(targets);
       return;
