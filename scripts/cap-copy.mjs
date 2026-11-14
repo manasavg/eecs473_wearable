@@ -26,6 +26,20 @@ cpSync(outDir, publicDir, { recursive: true });
 writeFileSync(join(publicDir, "cordova.js"), "");
 writeFileSync(join(publicDir, "cordova_plugins.js"), "");
 
+// Xcode bundles this file. Git ignores it as generated, so a fresh clone has none.
+// This is the file Capacitor writes when no Cordova plugins are installed.
+const cordovaConfigPath = join(root, "ios/App/App/config.xml");
+if (!existsSync(cordovaConfigPath)) {
+  writeFileSync(
+    cordovaConfigPath,
+    `<?xml version='1.0' encoding='utf-8'?>
+<widget version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+  <access origin="*" />
+</widget>
+`,
+  );
+}
+
 const config = JSON.parse(readFileSync(join(root, "capacitor.config.json"), "utf8"));
 config.packageClassList = ["BluetoothLe", "LocalNotificationsPlugin"];
 writeFileSync(configPath, `${JSON.stringify(config, null, "\t")}\n`);
