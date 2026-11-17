@@ -51,6 +51,13 @@ export function notifySilent(who: string, seconds: number, lastKnown: string | n
   return notify(`Lost contact with ${who}`, lastKnown ? `${body} Its ${lastKnown}.` : body);
 }
 
+export function notifyLinkLost(board: string | null): Promise<void> {
+  return notify(
+    "Lost the leader board",
+    `The phone lost its Bluetooth link to ${board ?? "the leader board"}. Alerts are paused until you reconnect.`,
+  );
+}
+
 export function notifyNoAnswer(who: string, reason: string): Promise<void> {
   return notify(`${who} did not answer the check-in`, reason);
 }

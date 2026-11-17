@@ -818,7 +818,7 @@ export class ExcursionAppClient {
         this.commit({
           ...this.state,
           connection: "disconnected",
-          error: "The beacon link dropped.",
+          error: "Lost the Bluetooth link to the leader board. Alerts are paused. Disconnect, then reconnect to it.",
         });
         return;
       case "reconnecting":

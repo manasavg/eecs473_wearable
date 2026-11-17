@@ -137,6 +137,8 @@ export class NativeBleTransport implements BleTransport {
   private central: NativeCentral | null = null;
   private deviceId: string | null = null;
   private deviceName = BLE_NAME_PREFIX;
+  /** Open check-ins, kept across reconnects. See MeshLink. */
+  private readonly pendingCheckIns = new Map<number, number>();
   private writeTarget: { uuid: string; withoutResponse: boolean } | null = null;
   private wantLink = false;
   private reconnectsLeft = 0;
@@ -346,6 +348,7 @@ export class NativeBleTransport implements BleTransport {
       this.link = new MeshLink(
         (bytes) => this.writeMesh(central, device.deviceId, bytes),
         (event) => this.emit(event),
+        this.pendingCheckIns,
       );
 
       await this.subscribeChar(central, device.deviceId, LIVE_TX_UUID);

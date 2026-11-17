@@ -46,15 +46,23 @@ export class MeshLink {
   /** Not heard for hours when the database was read. Cleared as soon as the board is heard again. */
   private readonly stale = new Set<number>();
   private writeWaiters: WriteWaiter[] = [];
-  /** Check-in packet id → the board it was sent to. */
-  private readonly pending = new Map<number, number>();
+  /**
+   * Check-in packet id → the board it was sent to. The transport passes the same map to the
+   * link it builds after a reconnect, so an answer that arrives after the drop still counts.
+   */
+  private readonly pending: Map<number, number>;
   /** Set by the radio's echo of a text this phone just sent. */
   private echoedTextId: number | null = null;
   /** The connected board's own settings, as configure reports them. */
   private readonly boardConfig: CurrentBoardConfig = {};
 
-  constructor(write: (bytes: Uint8Array) => Promise<void>, onEvent: (event: BleEvent) => void) {
+  constructor(
+    write: (bytes: Uint8Array) => Promise<void>,
+    onEvent: (event: BleEvent) => void,
+    pending: Map<number, number> = new Map(),
+  ) {
     this.onEvent = onEvent;
+    this.pending = pending;
     let controller: ReadableStreamDefaultController<{ type: "packet"; data: Uint8Array }> | null = null;
     const fromDevice = new ReadableStream<{ type: "packet"; data: Uint8Array }>({
       start: (stream) => {
@@ -451,9 +459,13 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-/** An OK press: the word OK anywhere, such as "OK detected" from the Detection Sensor module. */
+/**
+ * A text reply that means OK: it starts with the word OK, such as "OK" or "OK detected".
+ * Not OK anywhere, so "not ok" does not confirm a check-in. The button sends its own
+ * message type, handled in onDetectionSensorPacket.
+ */
 export function isOkText(text: string): boolean {
-  return /\bOK\b/i.test(text);
+  return /^OK\b/i.test(text.trim());
 }
 
 function routingErrorCode(error: unknown): number | null {

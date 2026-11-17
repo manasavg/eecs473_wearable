@@ -24,6 +24,7 @@ import { boardLabel, formatGpsDegrees, formatSeparation } from "@/lib/format";
 import {
   ensureNotifyPermission,
   formatDuration,
+  notifyLinkLost,
   notifyNoAnswer,
   notifyOutOfRange,
   notifySilent,
@@ -77,6 +78,7 @@ export function ExcursionApp() {
   const [silenceDraft, setSilenceDraft] = useState(String(state.silenceSeconds));
   const [confirmDraft, setConfirmDraft] = useState(state.requireConfirm);
   const [looked, setLooked] = useState(false);
+  const lastConnection = useRef(state.connection);
   const seen = useRef<Record<number, { out: boolean; silent: boolean; checkIn: CheckInStatus | null }>>({});
 
   useEffect(() => {
@@ -96,6 +98,19 @@ export function ExcursionApp() {
   useEffect(() => {
     setConfirmDraft(state.requireConfirm);
   }, [state.requireConfirm]);
+
+  // The phone lost the leader and gave up reconnecting: every other alert stops with it.
+  useEffect(() => {
+    const previous = lastConnection.current;
+    lastConnection.current = state.connection;
+    if (
+      state.connection === "disconnected" &&
+      state.mode !== "idle" &&
+      (previous === "connected" || previous === "reconnecting")
+    ) {
+      void notifyLinkLost(state.deviceName);
+    }
+  }, [state.connection, state.mode, state.deviceName]);
 
   // Notify once each time a follower goes out of range, goes silent, or misses a check-in.
   useEffect(() => {

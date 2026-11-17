@@ -35,6 +35,8 @@ export function webBluetoothAvailable(): boolean {
 
 export class WebBluetoothTransport implements BleTransport {
   private listeners = new Set<(event: BleEvent) => void>();
+  /** Open check-ins, kept across reconnects. See MeshLink. */
+  private readonly pendingCheckIns = new Map<number, number>();
   private device: BluetoothDevice | null = null;
   private command: BluetoothRemoteGATTCharacteristic | null = null;
   private fromRadio: BluetoothRemoteGATTCharacteristic | null = null;
@@ -175,6 +177,7 @@ export class WebBluetoothTransport implements BleTransport {
           throw new Error("ToRadio is not writable.");
         },
         (event) => this.emit(event),
+        this.pendingCheckIns,
       );
 
       await this.listen(fromNum, () => {

@@ -145,7 +145,7 @@ export function parseLiveNotify(bytes: Uint8Array): LiveNotify {
 /** The leader notifies these two bytes after a follower LoRa packet says OK. */
 export function isFollowerOkSignal(text: string | null | undefined): boolean {
   if (!text) return false;
-  return /\bOK\b/i.test(text);
+  return /^OK\b/i.test(text.trim());
 }
 
 /** One notification, as the events the dashboard already understands. */

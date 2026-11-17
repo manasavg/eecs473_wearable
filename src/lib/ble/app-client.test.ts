@@ -652,7 +652,7 @@ describe("ExcursionAppClient", () => {
     assert.equal(nodeSuffix(0x000019e8), "19e8");
   });
 
-  it("shows each board's last message and counts OK anywhere in it as a press", async () => {
+  it("shows each board's last message and counts a reply starting with OK", async () => {
     const transport = new ScriptedTransport();
     const client = new ExcursionAppClient();
     await client.connectDevice("beacon", transport);
@@ -660,8 +660,10 @@ describe("ExcursionAppClient", () => {
     transport.emit({ type: "live", counter: null, text: "hello", hex: "", fromId: 0xa3, okId: null });
     assert.equal(client.getState().followers[0]?.lastText?.text, "hello");
     await client.sendCheckIn(0xa3);
-    transport.emit({ type: "live", counter: null, text: "Button OK", hex: "", fromId: 0xa3, okId: 0xa3 });
-    assert.equal(client.getState().followers[0]?.lastText?.text, "Button OK");
+    transport.emit({ type: "live", counter: null, text: "not ok", hex: "", fromId: 0xa3, okId: null });
+    assert.equal(client.getState().followers[0]?.lastText?.text, "not ok");
+    assert.equal(client.getState().followers[0]?.checkIn?.status, "sending");
+    transport.emit({ type: "live", counter: null, text: "OK thanks", hex: "", fromId: 0xa3, okId: 0xa3 });
     assert.equal(client.getState().followers[0]?.checkIn?.status, "ok");
     await client.disconnect();
   });

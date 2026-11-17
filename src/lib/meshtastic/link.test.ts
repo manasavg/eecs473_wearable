@@ -267,4 +267,31 @@ describe("MeshLink", () => {
     assert.equal(press.id, 0x19e8);
     assert.equal(press.text, "OK detected");
   });
+
+  it("does not read 'not ok' as an OK reply", async () => {
+    const { isOkText } = await import("./link.ts");
+    assert.equal(isOkText("OK"), true);
+    assert.equal(isOkText("ok detected"), true);
+    assert.equal(isOkText("not ok"), false);
+    assert.equal(isOkText("okay"), false);
+  });
+
+  it("still counts an acknowledgement that arrives after a reconnect", async () => {
+    const pending = new Map<number, number>();
+    const first: BleEvent[] = [];
+    const before = new MeshLink(async () => undefined, (event) => first.push(event), pending);
+    before.push(fromRadio({ case: "myInfo", value: create(Mesh.MyNodeInfoSchema, { myNodeNum: 0x11 }) }));
+    before.push(nodeA3());
+    await settle();
+    const packetId = await before.sendCheckIn(0xa3);
+
+    // The Bluetooth link drops; the transport builds a new link with the same map.
+    const second: BleEvent[] = [];
+    const after = new MeshLink(async () => undefined, (event) => second.push(event), pending);
+    after.push(fromRadio({ case: "myInfo", value: create(Mesh.MyNodeInfoSchema, { myNodeNum: 0x11 }) }));
+    after.push(nodeA3());
+    after.push(routing(0xa3, packetId, Mesh.Routing_Error.NONE));
+    await settle();
+    assert.ok(second.some((event) => event.type === "checkin-ack" && event.packetId === packetId));
+  });
 });
