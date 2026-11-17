@@ -79,6 +79,12 @@ export function ExcursionApp() {
   const [silenceDraft, setSilenceDraft] = useState(String(state.silenceSeconds));
   const [confirmDraft, setConfirmDraft] = useState(state.requireConfirm);
   const [looked, setLooked] = useState(false);
+  const [view, setView] = useState<"dashboard" | "settings">("dashboard");
+  /** The name chosen in the app, else the radio's name, else the node number. */
+  const nameOf = (id: number, fallback: string | null) => app.names[nodeSuffix(id)] || fallback || boardLabel(id);
+  const label = (follower: TrackedFollower) => nameOf(follower.id, follower.name);
+  const leaderLabel =
+    state.leaderId != null ? nameOf(state.leaderId, state.deviceName) : (state.deviceName ?? "the leader");
   const lastConnection = useRef(state.connection);
   const announced = useRef<Record<number, number>>({});
   const seen = useRef<Record<number, { out: boolean; silent: boolean; checkIn: CheckInStatus | null }>>({});
@@ -110,10 +116,10 @@ export function ExcursionApp() {
       const where = emergency.lastKnown
         ? ` Last known ${formatGpsDegrees(emergency.lastKnown.lat)}, ${formatGpsDegrees(emergency.lastKnown.lon)}.`
         : "";
-      void notifyEmergency(emergency.name, `${emergency.text}${where}`);
+      void notifyEmergency(app.names[nodeSuffix(emergency.id)] || emergency.name, `${emergency.text}${where}`);
     }
     announced.current = next;
-  }, [state.emergencies]);
+  }, [state.emergencies, app.names]);
 
   // The phone lost the leader and gave up reconnecting: every other alert stops with it.
   useEffect(() => {
@@ -134,7 +140,7 @@ export function ExcursionApp() {
     const group = { group: state.group };
     for (const follower of state.followers.filter((item) => isInGroup(group, item.id))) {
       const previous = seen.current[follower.id];
-      const who = followerLabel(follower);
+      const who = app.names[nodeSuffix(follower.id)] || followerLabel(follower);
       const checkIn = follower.checkIn?.status ?? null;
       if (previous) {
         if (follower.outOfRange && !previous.out && follower.separationM != null) {
@@ -158,7 +164,7 @@ export function ExcursionApp() {
       next[follower.id] = { out: follower.outOfRange, silent: follower.silent, checkIn };
     }
     seen.current = next;
-  }, [state.followers, state.group, state.thresholdMeters, state.silenceSeconds]);
+  }, [state.followers, state.group, state.thresholdMeters, state.silenceSeconds, app.names]);
 
   const grouped = state.group.length > 0;
   const followers = state.followers.filter((follower) => isInGroup(state, follower.id));
@@ -168,8 +174,6 @@ export function ExcursionApp() {
     const added: GroupMember[] = items.map((item) => ({ suffix: nodeSuffix(item.id), name: item.name }));
     app.setGroup([...state.group, ...added.filter((item) => !state.group.some((member) => member.suffix === item.suffix))]);
   };
-  const removeFromGroup = (id: number) =>
-    app.setGroup(state.group.filter((member) => member.suffix !== nodeSuffix(id)));
   const groupHas = (suffix: string | null) => suffix != null && state.group.some((member) => member.suffix === suffix);
   const toggleGroup = (suffix: string, name: string) =>
     app.setGroup(
@@ -181,6 +185,29 @@ export function ExcursionApp() {
   const unseenMembers = state.group.filter(
     (member) => !app.peers.some((peer) => peerSuffix(peer.name) === member.suffix),
   );
+  // Every board for Boards & names: the leader, then each board heard or in the group.
+  const allBoards = [
+    ...(state.leaderId != null
+      ? [
+          {
+            id: state.leaderId,
+            suffix: nodeSuffix(state.leaderId),
+            radioName: state.deviceName,
+            label: leaderLabel,
+            leader: true,
+            placeholder: false,
+          },
+        ]
+      : []),
+    ...state.followers.map((follower) => ({
+      id: follower.id,
+      suffix: nodeSuffix(follower.id),
+      radioName: follower.placeholder ? null : follower.name,
+      label: label(follower),
+      leader: false,
+      placeholder: follower.placeholder,
+    })),
+  ];
   const outFollowers = followers.filter((follower) => follower.outOfRange && !follower.silent);
   const silentFollowers = followers.filter((follower) => follower.silent);
   const asked = followers.filter((follower) => follower.checkIn);
@@ -197,7 +224,7 @@ export function ExcursionApp() {
       ? "Not sent"
       : answered.length === asked.length
         ? asked.length === 1
-          ? `${followerLabel(answered[0])} is OK`
+          ? `${label(answered[0])} is OK`
           : `All ${asked.length} OK`
         : missed.length > 0
           ? `${answered.length} of ${asked.length} OK · ${missed.length} not OK`
@@ -207,7 +234,18 @@ export function ExcursionApp() {
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-4 py-6">
-      <h1 className="text-xl font-semibold">Excursion</h1>
+      <header className="flex items-center justify-between gap-2">
+        <h1 className="text-xl font-semibold">{view === "settings" && onLink ? "Settings" : "Excursion"}</h1>
+        {onLink && (
+          <button
+            type="button"
+            className="h-10 border border-neutral-300 bg-white px-3 text-sm"
+            onClick={() => setView(view === "settings" ? "dashboard" : "settings")}
+          >
+            {view === "settings" ? "Done" : "Settings"}
+          </button>
+        )}
+      </header>
 
       {!onLink ? (
         <div className="mt-6 flex flex-col gap-4">
@@ -257,7 +295,12 @@ export function ExcursionApp() {
                               onChange={() => suffix && toggleGroup(suffix, peer.name)}
                               aria-label={`${peer.name} is in the group`}
                             />
-                            <span className="font-medium">{peer.name}</span>
+                            <span className="flex flex-col">
+                              <span className="font-medium">{(suffix && app.names[suffix]) || peer.name}</span>
+                              {suffix && app.names[suffix] && (
+                                <span className="text-xs text-neutral-500">{peer.name}</span>
+                              )}
+                            </span>
                           </label>
                           <button
                             type="button"
@@ -335,228 +378,64 @@ export function ExcursionApp() {
             </p>
           )}
         </div>
-      ) : (
-        <div className="mt-6 flex flex-col gap-6">
-          {state.emergencies.map((emergency) => (
-            <div
-              key={`emergency-${emergency.id}`}
-              className="border-4 border-red-800 bg-red-700 px-3 py-3 text-white"
-              role="alert"
-              aria-live="assertive"
-            >
-              <p className="text-lg font-bold">EMERGENCY · {emergency.name}</p>
-              <p className="mt-1 text-sm">
-                {emergency.how === "hold" ? "Held their button. " : `Sent "${emergency.text}". `}
-                {clockTime(emergency.at, now)} · {ago(emergency.at, now)}
-              </p>
-              {emergency.lastKnown && (
-                <p className="mt-1 text-sm tabular-nums">
-                  Last known {formatGpsDegrees(emergency.lastKnown.lat)}, {formatGpsDegrees(emergency.lastKnown.lon)} at{" "}
-                  {clockTime(emergency.lastKnown.at, now)} ·{" "}
-                  <a
-                    className="underline"
-                    href={`https://maps.apple.com/?ll=${emergency.lastKnown.lat},${emergency.lastKnown.lon}&q=${encodeURIComponent(emergency.name)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Open in Maps
-                  </a>
-                </p>
-              )}
-              <button
-                type="button"
-                className="mt-3 h-11 w-full border border-white bg-white font-medium text-red-800"
-                onClick={() => app.acknowledgeEmergency(emergency.id)}
-              >
-                Acknowledge
-              </button>
-            </div>
-          ))}
-          {(silentFollowers.length > 0 || outFollowers.length > 0) && (
-            <div className="border border-red-700 bg-red-50 px-3 py-3 text-sm text-red-800" role="alert">
-              {silentFollowers.map((follower) => (
-                <p key={`silent-${follower.id}`}>
-                  Lost contact with {followerLabel(follower)} · last heard {ago(follower.lastHeardAt, now)}
-                  {follower.lastKnown ? ` · ${lastKnownSummary(follower.lastKnown, now)}` : ""}.
-                </p>
-              ))}
-              {outFollowers.map((follower) => (
-                <p key={`out-${follower.id}`}>
-                  {followerLabel(follower)} is out of range
-                  {follower.separationM != null ? ` · ${formatSeparation(follower.separationM)}` : ""}. Limit{" "}
-                  {state.thresholdMeters} m
-                  {follower.lastKnown ? ` · ${lastKnownSummary(follower.lastKnown, now)}` : ""}.
-                </p>
-              ))}
-            </div>
-          )}
-          <p className="text-sm text-neutral-600">
-            {state.connection === "connected"
-              ? "Leader"
-              : state.connection === "reconnecting"
-                ? "Reconnecting"
-                : state.connection === "scanning"
-                  ? "Connecting"
-                  : "Disconnected"}
-            {state.deviceName ? ` · ${state.deviceName}` : ""}
-          </p>
-          {grouped && !leaderInGroup && state.leaderId != null && (
+      ) : view === "settings" ? (
+        <div className="mt-6 flex flex-col gap-8">
+          <section className="flex flex-col gap-3">
+            <h2 className="text-base font-semibold">Boards &amp; names</h2>
             <p className="text-sm text-neutral-600">
-              This board is not in the group.{" "}
-              <button
-                type="button"
-                className="underline"
-                onClick={() => addToGroup([{ id: state.leaderId!, name: state.deviceName ?? boardLabel(state.leaderId!) }])}
-              >
-                Add it
-              </button>{" "}
-              so it shows as a follower when another board leads.
+              Name each board here; the name shows everywhere in the app. Tick the boards in your group. Once any
+              board is ticked, unticked boards are hidden from the dashboard.
             </p>
-          )}
-          {state.error && (
-            <p className="text-sm text-red-700" role="alert">
-              {state.error}{" "}
-              <button type="button" className="underline" onClick={app.dismissError}>
-                Dismiss
-              </button>
-            </p>
-          )}
-
-          <section>
-            <h2 className="text-sm font-medium">Check-in</h2>
-            <p className="mt-2 text-2xl">{checkInSummary}</p>
-            <button
-              type="button"
-              className="mt-3 h-11 w-full border border-black bg-black text-white disabled:opacity-40"
-              disabled={!linked || followers.length === 0}
-              onClick={() => void app.checkIn(BROADCAST_ID)}
-            >
-              {followers.length > 1 ? `Check in all ${followers.length}` : "Check in"}
-            </button>
-            <p className="mt-2 text-sm text-neutral-600">
-              Sends CHECK IN to each follower. To ask one board, use the button on its card.{" "}
-              {state.requireConfirm
-                ? "A board shows Received when its radio gets the message, and OK once someone presses its OK button."
-                : "A board shows OK when its radio gets the message, or when someone presses its OK button."}
-            </p>
-          </section>
-
-          {state.board?.region === 0 && (
-            <p className="border border-red-700 bg-red-50 px-3 py-3 text-sm text-red-800" role="alert">
-              This board&apos;s LoRa region is not set, so its radio is off and it cannot hear the other boards. Open
-              Board setup below, choose the region, and set up this board.
-            </p>
-          )}
-          {state.board?.txEnabled === false && (
-            <p className="border border-red-700 bg-red-50 px-3 py-3 text-sm text-red-800" role="alert">
-              This board&apos;s transmit is turned off, so other boards cannot hear it. Board setup turns it back on.
-            </p>
-          )}
-
-          <section className="border-t border-neutral-200 pt-6">
-            <h2 className="text-sm font-medium">
-              Followers{followers.length > 0 ? ` (${followers.length})` : ""}
-            </h2>
-            <p className="mt-2 text-sm text-neutral-600">
-              {grouped
-                ? "Your group's boards. A board not heard yet still has a card, so a missing one stands out."
-                : followers.length === 0
-                  ? "Waiting for the other boards. They show up when this radio hears them, even before they have a GPS fix. Nodes from the public internet are left out."
-                  : "Every board this radio hears, including other people's on the same channel. Add your boards to the group to hide the rest."}
-            </p>
-            {!grouped && followers.length > 0 && (
-              <button
-                type="button"
-                className="mt-3 h-11 w-full border border-black bg-white"
-                onClick={() => {
-                  const leader =
-                    state.leaderId != null
-                      ? [{ id: state.leaderId, name: state.deviceName ?? boardLabel(state.leaderId) }]
-                      : [];
-                  addToGroup([
-                    ...leader,
-                    ...followers.map((follower) => ({ id: follower.id, name: followerLabel(follower) })),
-                  ]);
-                }}
-              >
-                Make these {followers.length + (state.leaderId != null ? 1 : 0)} boards the group
-              </button>
-            )}
-            {followers.length > 0 && (compass.needsGesture || compass.heading == null) && (
-              <button
-                type="button"
-                className="mt-3 h-11 w-full border border-black bg-white"
-                onClick={() => void compass.enable()}
-              >
-                Use compass
-              </button>
-            )}
-            {compass.denied && (
-              <p className="mt-2 text-sm text-red-700" role="alert">
-                Compass permission was denied. Each arrow stays aligned to north.
-              </p>
-            )}
-            <div className="mt-4 flex flex-col gap-4">
-              {followers.map((follower) => (
-                <FollowerCard
-                  key={follower.id}
-                  follower={follower}
-                  now={now}
-                  linked={linked}
-                  onCheckIn={() => void app.checkIn(follower.id)}
-                  emergency={state.emergencies.some((item) => item.id === follower.id)}
-                  groupAction={
-                    grouped
-                      ? {
-                          label: "Remove",
-                          onClick: () => {
-                            if (window.confirm(`Remove ${followerLabel(follower)} from the group?`)) {
-                              removeFromGroup(follower.id);
-                            }
-                          },
-                        }
-                      : {
-                          label: "Add to group",
-                          onClick: () => addToGroup([{ id: follower.id, name: followerLabel(follower) }]),
-                        }
-                  }
-                  leaderFix={state.gpsFix}
-                  leaderLat={state.gpsLat}
-                  leaderLon={state.gpsLon}
-                  heading={compass.heading}
-                />
+            {allBoards.length === 0 && <p className="text-sm text-neutral-600">No boards heard yet.</p>}
+            <ul className="flex flex-col gap-2">
+              {allBoards.map((item) => (
+                <li key={item.suffix} className="border border-neutral-300 px-3 py-2">
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      className="h-5 w-5 shrink-0"
+                      checked={groupHas(item.suffix)}
+                      onChange={() => toggleGroup(item.suffix, item.radioName ?? boardLabel(item.id))}
+                      aria-label={`${item.label} is in the group`}
+                    />
+                    <input
+                      type="text"
+                      defaultValue={app.names[item.suffix] ?? ""}
+                      placeholder={item.radioName ?? boardLabel(item.id)}
+                      maxLength={30}
+                      className="h-10 min-w-0 flex-1 border border-neutral-300 px-2"
+                      aria-label={`Name for ${item.label}`}
+                      onBlur={(event) => app.renameBoard(item.suffix, event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+                      }}
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-neutral-500 tabular-nums">
+                    {item.leader ? "Leader · " : ""}ID {item.placeholder ? `…${item.suffix}` : `!${(item.id >>> 0).toString(16).padStart(8, "0")}`}
+                    {item.radioName ? ` · radio name ${item.radioName}` : ""}
+                    {item.placeholder ? " · not heard yet" : ""}
+                  </p>
+                </li>
               ))}
-            </div>
-            {others.length > 0 && (
-              <details className="mt-4 border border-neutral-200 px-3 py-2">
-                <summary className="cursor-pointer text-sm text-neutral-600">
-                  Other boards nearby ({others.length}) · not in your group
-                </summary>
-                <ul className="mt-2 flex flex-col gap-2">
-                  {others.map((other) => (
-                    <li key={other.id} className="flex items-center justify-between gap-2 text-sm">
-                      <span>
-                        {followerLabel(other)}
-                        <span className="text-neutral-500"> · heard {ago(other.lastHeardAt, now)}</span>
-                      </span>
-                      <button
-                        type="button"
-                        className="h-9 shrink-0 border border-neutral-300 bg-white px-3"
-                        onClick={() => addToGroup([{ id: other.id, name: followerLabel(other) }])}
-                      >
-                        Add to group
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </details>
+            </ul>
+            {!grouped && allBoards.length > 0 && (
+              <button
+                type="button"
+                className="h-11 border border-black bg-white"
+                onClick={() =>
+                  app.setGroup(allBoards.map((item) => ({ suffix: item.suffix, name: item.radioName ?? boardLabel(item.id) })))
+                }
+              >
+                Tick all {allBoards.length}
+              </button>
             )}
           </section>
 
-          <section className="border-t border-neutral-200 pt-6">
-            <h2 className="text-sm font-medium">Alerts</h2>
+          <section className="flex flex-col gap-3">
+            <h2 className="text-base font-semibold">Alerts</h2>
             <form
-              className="mt-3 flex flex-col gap-3"
+              className="flex flex-col gap-3"
               onSubmit={(event) => {
                 event.preventDefault();
                 const meters = Number.parseInt(rangeDraft, 10);
@@ -607,10 +486,9 @@ export function ExcursionApp() {
                 Save
               </button>
             </form>
-            <p className="mt-2 text-sm text-neutral-600">
-              Range {THRESHOLD_MIN_M}–{THRESHOLD_MAX_M} m. Lost contact {SILENCE_MIN_S}–{SILENCE_MAX_S} s. Set
-              each board to send its position more often than the lost-contact time, or it will be flagged
-              between reports. Both are saved on this phone.
+            <p className="text-sm text-neutral-600">
+              Range {THRESHOLD_MIN_M}–{THRESHOLD_MAX_M} m. Lost contact {SILENCE_MIN_S}–{SILENCE_MAX_S} s. Saved on this
+              phone.
             </p>
           </section>
 
@@ -618,37 +496,219 @@ export function ExcursionApp() {
             board={state.board}
             setup={state.boardSetup}
             linked={linked}
+            leaderLabel={leaderLabel}
             onSetUp={app.setUpBoard}
+            native={nativeShell}
+            others={app.peers
+              .filter((peer) => {
+                const suffix = peerSuffix(peer.name);
+                return !(state.leaderId != null && suffix === nodeSuffix(state.leaderId)) && peer.name !== state.deviceName;
+              })
+              .map((peer) => {
+                const suffix = peerSuffix(peer.name);
+                return { peer, label: (suffix && app.names[suffix]) || peer.name };
+              })}
+            scanning={app.scanning}
+            onScan={() => void app.lookForDevices()}
+            onSetUpOther={app.setUpOther}
+            otherSetup={app.otherSetup}
           />
-
-          <section className="border-t border-neutral-200 pt-6">
-            <h2 className="text-sm font-medium">Leader GPS</h2>
-            {state.gpsFix === true ? (
-              <div className="mt-2">
-                <p className="text-sm text-neutral-600">Latitude</p>
-                <p className="text-2xl tabular-nums">{formatGpsDegrees(state.gpsLat)}</p>
-                <p className="mt-2 text-sm text-neutral-600">Longitude</p>
-                <p className="text-2xl tabular-nums">{formatGpsDegrees(state.gpsLon)}</p>
-                {state.gpsAt != null && (
-                  <p className="mt-2 text-sm text-neutral-600">Position from {ago(state.gpsAt, now)}</p>
-                )}
-              </div>
-            ) : (
-              <p className="mt-2 text-4xl">{state.gpsFix === false ? "No fix" : "—"}</p>
-            )}
-            <p className="mt-2 text-sm text-neutral-600">
-              This board. The phone is connected to it.
-              {batteryText(state.leaderBatteryPercent) ? ` Battery ${batteryText(state.leaderBatteryPercent)}.` : ""}
-            </p>
-          </section>
 
           <button
             type="button"
             className="h-11 border border-neutral-300 bg-white"
-            onClick={() => void app.leave()}
+            onClick={() => {
+              setView("dashboard");
+              void app.leave();
+            }}
           >
-            Disconnect
+            Disconnect from {leaderLabel}
           </button>
+        </div>
+      ) : (
+        <div className="mt-6 flex flex-col gap-6">
+          {state.emergencies.map((emergency) => {
+            const who = nameOf(emergency.id, emergency.name);
+            return (
+              <div
+                key={`emergency-${emergency.id}`}
+                className="border-4 border-red-800 bg-red-700 px-3 py-3 text-white"
+                role="alert"
+                aria-live="assertive"
+              >
+                <p className="text-lg font-bold">EMERGENCY · {who}</p>
+                <p className="mt-1 text-sm">
+                  {emergency.how === "hold" ? "Held their button. " : `Sent "${emergency.text}". `}
+                  {clockTime(emergency.at, now)} · {ago(emergency.at, now)}
+                </p>
+                {emergency.lastKnown && (
+                  <p className="mt-1 text-sm tabular-nums">
+                    Last known {formatGpsDegrees(emergency.lastKnown.lat)}, {formatGpsDegrees(emergency.lastKnown.lon)}{" "}
+                    at {clockTime(emergency.lastKnown.at, now)} ·{" "}
+                    <a
+                      className="underline"
+                      href={`https://maps.apple.com/?ll=${emergency.lastKnown.lat},${emergency.lastKnown.lon}&q=${encodeURIComponent(who)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open in Maps
+                    </a>
+                  </p>
+                )}
+                <button
+                  type="button"
+                  className="mt-3 h-11 w-full border border-white bg-white font-medium text-red-800"
+                  onClick={() => app.acknowledgeEmergency(emergency.id)}
+                >
+                  Acknowledge
+                </button>
+              </div>
+            );
+          })}
+          {(silentFollowers.length > 0 || outFollowers.length > 0) && (
+            <div className="border border-red-700 bg-red-50 px-3 py-3 text-sm text-red-800" role="alert">
+              {silentFollowers.map((follower) => (
+                <p key={`silent-${follower.id}`}>
+                  Lost contact with {label(follower)} · last heard {ago(follower.lastHeardAt, now)}
+                  {follower.lastKnown ? ` · ${lastKnownSummary(follower.lastKnown, now)}` : ""}.
+                </p>
+              ))}
+              {outFollowers.map((follower) => (
+                <p key={`out-${follower.id}`}>
+                  {label(follower)} is out of range
+                  {follower.separationM != null ? ` · ${formatSeparation(follower.separationM)}` : ""}. Limit{" "}
+                  {state.thresholdMeters} m
+                  {follower.lastKnown ? ` · ${lastKnownSummary(follower.lastKnown, now)}` : ""}.
+                </p>
+              ))}
+            </div>
+          )}
+          {(state.board?.region === 0 || state.board?.txEnabled === false) && (
+            <div className="border border-red-700 bg-red-50 px-3 py-3 text-sm text-red-800" role="alert">
+              {state.board?.region === 0
+                ? "The leader's LoRa region is not set, so its radio is off and it cannot hear the other boards."
+                : "The leader's transmit is turned off, so the other boards cannot hear it."}{" "}
+              <button type="button" className="underline" onClick={() => setView("settings")}>
+                Open Board setup
+              </button>
+            </div>
+          )}
+          {state.error && (
+            <p className="text-sm text-red-700" role="alert">
+              {state.error}{" "}
+              <button type="button" className="underline" onClick={app.dismissError}>
+                Dismiss
+              </button>
+            </p>
+          )}
+
+          <section className="border border-neutral-200 px-3 py-2 text-sm text-neutral-700">
+            <p>
+              <span className="font-medium">
+                {state.connection === "connected"
+                  ? "Leader"
+                  : state.connection === "reconnecting"
+                    ? "Reconnecting to"
+                    : state.connection === "scanning"
+                      ? "Connecting to"
+                      : "Disconnected from"}
+              </span>{" "}
+              {leaderLabel}
+              {batteryText(state.leaderBatteryPercent) ? ` · Battery ${batteryText(state.leaderBatteryPercent)}` : ""}
+            </p>
+            <p className="tabular-nums text-neutral-600">
+              {state.gpsFix === true
+                ? `GPS ${formatGpsDegrees(state.gpsLat)}, ${formatGpsDegrees(state.gpsLon)}${
+                    state.gpsAt != null ? ` · ${ago(state.gpsAt, now)}` : ""
+                  }`
+                : state.gpsFix === false
+                  ? "GPS: no fix"
+                  : "GPS: waiting"}
+            </p>
+            {grouped && !leaderInGroup && state.leaderId != null && (
+              <p className="mt-1 text-neutral-600">
+                This board is not in the group.{" "}
+                <button
+                  type="button"
+                  className="underline"
+                  onClick={() => addToGroup([{ id: state.leaderId!, name: state.deviceName ?? boardLabel(state.leaderId!) }])}
+                >
+                  Add it
+                </button>
+              </p>
+            )}
+          </section>
+
+          <section>
+            <div className="flex items-baseline justify-between gap-2">
+              <h2 className="text-sm font-medium">Check-in</h2>
+              <p className="text-sm text-neutral-600">{checkInSummary}</p>
+            </div>
+            <button
+              type="button"
+              className="mt-2 h-11 w-full border border-black bg-black text-white disabled:opacity-40"
+              disabled={!linked || followers.length === 0}
+              onClick={() => void app.checkIn(BROADCAST_ID)}
+            >
+              {followers.length > 1 ? `Check in all ${followers.length}` : "Check in"}
+            </button>
+          </section>
+
+          <section>
+            <h2 className="text-sm font-medium">
+              Followers{followers.length > 0 ? ` (${followers.length})` : ""}
+            </h2>
+            {followers.length === 0 && (
+              <p className="mt-2 text-sm text-neutral-600">
+                Waiting for the other boards. They show up when the leader hears them.
+              </p>
+            )}
+            {!grouped && followers.length > 0 && (
+              <p className="mt-2 text-sm text-neutral-600">
+                Showing every board heard.{" "}
+                <button type="button" className="underline" onClick={() => setView("settings")}>
+                  Pick your group in Settings
+                </button>{" "}
+                to hide the rest.
+              </p>
+            )}
+            {followers.length > 0 && (compass.needsGesture || compass.heading == null) && (
+              <button
+                type="button"
+                className="mt-3 h-11 w-full border border-black bg-white"
+                onClick={() => void compass.enable()}
+              >
+                Use compass
+              </button>
+            )}
+            {compass.denied && (
+              <p className="mt-2 text-sm text-red-700" role="alert">
+                Compass permission was denied. Each arrow stays aligned to north.
+              </p>
+            )}
+            <div className="mt-4 flex flex-col gap-4">
+              {followers.map((follower) => (
+                <FollowerCard
+                  key={follower.id}
+                  follower={follower}
+                  label={label(follower)}
+                  now={now}
+                  linked={linked}
+                  onCheckIn={() => void app.checkIn(follower.id)}
+                  emergency={state.emergencies.some((item) => item.id === follower.id)}
+                  leaderFix={state.gpsFix}
+                  leaderLat={state.gpsLat}
+                  leaderLon={state.gpsLon}
+                  heading={compass.heading}
+                />
+              ))}
+            </div>
+            {others.length > 0 && (
+              <p className="mt-4 text-sm text-neutral-500">
+                {others.length} other board{others.length === 1 ? "" : "s"} nearby, not in your group.
+              </p>
+            )}
+          </section>
         </div>
       )}
     </main>
@@ -691,7 +751,7 @@ function FollowerCard({
   linked,
   onCheckIn,
   emergency,
-  groupAction,
+  label,
   leaderFix,
   leaderLat,
   leaderLon,
@@ -702,7 +762,7 @@ function FollowerCard({
   linked: boolean;
   onCheckIn: () => void;
   emergency: boolean;
-  groupAction: { label: string; onClick: () => void };
+  label: string;
   leaderFix: boolean | null;
   leaderLat: number | null;
   leaderLon: number | null;
@@ -719,7 +779,6 @@ function FollowerCard({
     followerLon != null;
   const bearing = ready ? bearingDegrees(leaderLat, leaderLon, followerLat, followerLon) : null;
   const arrow = bearing == null ? null : heading == null ? bearing : relativeBearing(bearing, heading);
-  const label = followerLabel(follower);
   const alarm = follower.outOfRange || follower.silent;
   const status = follower.checkIn?.status;
   const busy = status === "sending" || status === "waiting" || status === "received";
@@ -843,9 +902,7 @@ function FollowerCard({
           Check in
         </button>
       </div>
-      <button type="button" className="mt-2 text-xs text-neutral-500 underline" onClick={groupAction.onClick}>
-        {groupAction.label}
-      </button>
+
     </article>
   );
 }

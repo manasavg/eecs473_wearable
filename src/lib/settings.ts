@@ -152,3 +152,30 @@ export function saveGroup(group: GroupMember[]): void {
     /* private mode */
   }
 }
+
+const NAMES_KEY = "excursion.names";
+
+/** Names chosen in the app for each board, keyed by the last 4 hex digits of its node number. */
+export function loadNames(): Record<string, string> {
+  try {
+    if (typeof localStorage === "undefined") return {};
+    const raw = localStorage.getItem(NAMES_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    for (const [suffix, name] of Object.entries(parsed)) {
+      if (/^[0-9a-f]{4}$/.test(suffix) && typeof name === "string" && name.trim()) out[suffix] = name.trim();
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function saveNames(names: Record<string, string>): void {
+  try {
+    localStorage.setItem(NAMES_KEY, JSON.stringify(names));
+  } catch {
+    /* private mode */
+  }
+}

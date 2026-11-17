@@ -39,6 +39,10 @@ A board appears as soon as the leader hears any packet from it, even before it h
 
 Use a private channel with its own key. On a shared or default channel, any stranger's board within 2 hops shows up too.
 
+## Names
+
+**Settings → Boards & names** lists the leader and every board heard or in the group. Type a name for any of them; it is saved on the phone and shown on cards, banners and notifications in place of the radio name. Each row still shows the board's node ID (`!xxxxxxxx`) and radio name. Names are keyed by the last 4 hex digits of the node number, so a board keeps its name whichever board leads. They are not written to the boards.
+
 ## Group
 
 The group is the list of your team's boards, saved on the phone. Include every board, the leader too, so any board can lead.
@@ -172,7 +176,11 @@ The quickest way is **Board setup** in Excursion, below. The Meshtastic app work
 
 ### Board setup in Excursion
 
-The Board setup section on the dashboard writes the settings above to the connected board in one step. It can only change the board the phone is connected to, so connect to each board in turn, including the leader, and tap **Set up this board**.
+Board setup is under **Settings** (top right of the dashboard). It writes the settings above in one step.
+
+- **Set up the leader** writes them to the connected board.
+- **Other boards → Find boards** lists the boards nearby. **Set up** on one opens a short second Bluetooth connection to it, writes the same settings, and lets go. The leader stays connected, so no board has to be made leader to be set up. Outside the iPhone app, **Choose a board to set up** asks the browser for one.
+- Once the leader is on a private channel, the team channel name and key are filled in from the leader, so every other board joins the leader's channel. **New key** replaces it, after a warning.
 
 | Field | Written to the board |
 | --- | --- |

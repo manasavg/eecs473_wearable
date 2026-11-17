@@ -6,13 +6,16 @@ import { isNativeShell } from "@/lib/ble/create-transport";
 import { rememberedNativeBeaconName } from "@/lib/ble/native-transport";
 import type { BlePeer } from "@/lib/ble/transport";
 import type { BoardPlan } from "@/lib/meshtastic/setup";
+import { setUpOtherBoard } from "@/lib/ble/setup-other";
 import { rememberedBeaconName } from "@/lib/ble/web-bluetooth-transport";
 import {
   loadGroup,
   loadLastKnown,
+  loadNames,
   loadSettings,
   saveGroup,
   saveLastKnown,
+  saveNames,
   saveSettings,
 } from "@/lib/settings";
 
@@ -27,6 +30,16 @@ export function useExcursion() {
   const [peers, setPeers] = useState<BlePeer[]>([]);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
+  /** Names chosen in the app, by the last 4 hex digits of each board's node number. */
+  const [names, setNames] = useState<Record<string, string>>({});
+  /** Progress of setting up boards other than the leader, by Bluetooth device id. */
+  const [otherSetup, setOtherSetup] = useState<
+    Record<string, { status: "working" | "done" | "error"; message: string }>
+  >({});
+
+  useEffect(() => {
+    setNames(loadNames());
+  }, []);
 
   useEffect(() => {
     const saved = loadSettings();
@@ -158,8 +171,40 @@ export function useExcursion() {
     [client],
   );
 
+  const renameBoard = useCallback((suffix: string, name: string) => {
+    setNames((current) => {
+      const next = { ...current };
+      if (name.trim()) next[suffix] = name.trim();
+      else delete next[suffix];
+      saveNames(next);
+      return next;
+    });
+  }, []);
+
+  /** Set up a board that is not the leader. The link to the leader stays up. */
+  const setUpOther = useCallback(async (peer: BlePeer | null, plan: BoardPlan) => {
+    const key = peer?.deviceId ?? "chooser";
+    const report = (status: "working" | "done" | "error", message: string) =>
+      setOtherSetup((current) => ({ ...current, [key]: { status, message } }));
+    try {
+      const result = await setUpOtherBoard(peer, plan, (message) => report("working", message));
+      report(
+        "done",
+        result === "confirmed"
+          ? "Done. The board saved the settings."
+          : "Settings sent. The board is restarting to apply them.",
+      );
+    } catch (error) {
+      report("error", error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
   return {
     state,
+    names,
+    renameBoard,
+    otherSetup,
+    setUpOther,
     acknowledgeEmergency: (id: number) => client.acknowledgeEmergency(id),
     setGroup,
     setUpBoard,

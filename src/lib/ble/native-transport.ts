@@ -135,6 +135,11 @@ export function rememberedNativeBeaconName(): string | null {
 }
 
 export class NativeBleTransport implements BleTransport {
+  /**
+   * Save this board as the one to reconnect to. Off for the short connection that sets up a
+   * follower, so the leader stays the remembered board.
+   */
+  remembers = true;
   private listeners = new Set<(event: BleEvent) => void>();
   private central: NativeCentral | null = null;
   private deviceId: string | null = null;
@@ -364,8 +369,10 @@ export class NativeBleTransport implements BleTransport {
       );
 
       await this.subscribeChar(central, device.deviceId, LIVE_TX_UUID);
-      writeStorage(DEVICE_ID_KEY, device.deviceId);
-      writeStorage(DEVICE_NAME_KEY, this.deviceName);
+      if (this.remembers) {
+        writeStorage(DEVICE_ID_KEY, device.deviceId);
+        writeStorage(DEVICE_NAME_KEY, this.deviceName);
+      }
       this.reconnectsLeft = RECONNECT_ATTEMPTS;
       this.emit({ type: "connected", deviceName: this.deviceName });
       await this.link.configure();
