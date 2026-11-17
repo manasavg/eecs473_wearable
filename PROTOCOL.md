@@ -55,9 +55,14 @@ The group is the list of your team's boards, saved on the phone. Include every b
 
 The phone finds boards over Bluetooth, which works whatever the radios are set to. Followers come over LoRa, so a board the phone can see but the leader never lists cannot be heard over the radio. Check, in this order:
 
+1. Each board has been set up with the current Board setup, so it sends its battery report every 60 s. Without a GPS fix, a board that has not been set up sends almost nothing, so the leader may not hear it for many minutes.
 1. The region is set. The dashboard warns when the connected board's region is not set.
 2. Every board has the same region, preset, and channel. Board setup sets all three, and lists any difference on the connected board.
-3. Both boards have antennas attached.
+3. Both boards have antennas attached. If one board hears the other but not the reverse, check the antenna on the board that is not heard, since its transmit path is the one failing.
+
+A board stops advertising over Bluetooth while anything is connected to it, such as the Meshtastic app running in the background. The board list also shows boards this phone is already connected to, but a board connected to another phone does not appear until that phone lets go.
+
+Settings are sent with the current `@meshtastic/protobufs` definitions, not the older copy bundled in `@meshtastic/core`, which drops newer fields such as the one that turns battery reports on.
 
 ## Lost contact
 
@@ -158,6 +163,7 @@ The Board setup section on the dashboard writes the settings above to the connec
 | Team channel name | Primary channel name (up to 11 characters) |
 | Team key | Primary channel key (AES-256). The first time, the app generates one. |
 | Position every | Position broadcast interval, 15–3600 s, default 30 s. Smart position off. GPS read every 15 s. |
+| (fixed) | Battery report over the radio every 60 s. It goes out with or without a GPS fix, so it is the heartbeat that keeps a board from looking lost indoors, and it shows as Battery on the card. |
 | OK button GPIO | Detection Sensor module, set up as in the OK button section. Blank leaves the module as it is. |
 
 It also sets full position precision and turns off MQTT uplink and downlink on the channel. Each write starts from the board's current settings, so the GPS pins, GPS mode and everything else not listed stay as they were. If GPS was disabled, it is turned on.

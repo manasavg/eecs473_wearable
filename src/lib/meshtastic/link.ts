@@ -1,7 +1,7 @@
 import { fromBinary } from "@bufbuild/protobuf";
 import { MeshDevice, Protobuf } from "@meshtastic/core";
 import type { BleEvent } from "../ble/transport";
-import { buildBoardWrites, summarize, type BoardPlan, type CurrentBoardConfig } from "./setup";
+import { adminBytes, buildBoardWrites, currentBoardConfig, summarize, type BoardPlan } from "./setup";
 
 const FIRST_NODE = 4;
 const REAL_TIME_SEC = 1_600_000_000;
@@ -54,7 +54,7 @@ export class MeshLink {
   /** Set by the radio's echo of a text this phone just sent. */
   private echoedTextId: number | null = null;
   /** The connected board's own settings, as configure reports them. */
-  private readonly boardConfig: CurrentBoardConfig = {};
+  private readonly boardConfig: Parameters<typeof currentBoardConfig>[0] = {};
 
   constructor(
     write: (bytes: Uint8Array) => Promise<void>,
@@ -111,8 +111,9 @@ export class MeshLink {
       this.emitBoardSettings();
     });
     this.device.events.onModuleConfigPacket.subscribe((config: Protobuf.ModuleConfig.ModuleConfig) => {
-      if (config.payloadVariant.case !== "detectionSensor") return;
-      this.boardConfig.detection = config.payloadVariant.value;
+      if (config.payloadVariant.case === "detectionSensor") this.boardConfig.detection = config.payloadVariant.value;
+      else if (config.payloadVariant.case === "telemetry") this.boardConfig.telemetry = config.payloadVariant.value;
+      else return;
       this.emitBoardSettings();
     });
     this.device.events.onMeshPacket.subscribe((packet: Protobuf.Mesh.MeshPacket) => {
@@ -133,6 +134,21 @@ export class MeshLink {
       if (!text) return;
       this.emit(live({ text, fromId: from, okId: isOkText(text) ? from : null }));
     });
+    // Battery reports. They double as the heartbeat; onHeard already counts the packet.
+    this.device.events.onTelemetryPacket.subscribe(
+      (packet: { from: number; data: Protobuf.Telemetry.Telemetry }) => {
+        if (packet.data.variant.case !== "deviceMetrics") return;
+        const metrics = packet.data.variant.value;
+        const from = packet.from >>> 0;
+        if (from !== this.myNode && (from < FIRST_NODE || this.rejected.has(from))) return;
+        this.emit({
+          type: "battery",
+          id: from,
+          percent: metrics.batteryLevel ?? null,
+          voltage: metrics.voltage ?? null,
+        });
+      },
+    );
     // The OK button: Meshtastic's Detection Sensor module sends "<name> detected" as its own
     // message type, not as a text message, so it never reaches onMessagePacket.
     // Any detection from a follower is a press, whatever name the module was given.
@@ -198,17 +214,23 @@ export class MeshLink {
    * which drops the Bluetooth link; the transport then reconnects.
    */
   async setUpBoard(plan: BoardPlan): Promise<"confirmed" | "restarting"> {
-    const writes = buildBoardWrites(this.boardConfig, plan);
-    // setConfig opens the edit session. Everything after it is applied together on commit.
-    await setupStep("position settings", this.device.setConfig(writes.position));
-    await setupStep("radio region and preset", this.device.setConfig(writes.lora));
-    await setupStep("team channel", this.device.setChannel(writes.channel));
-    if (writes.detection) await setupStep("OK button", this.device.setModuleConfig(writes.detection));
+    const writes = buildBoardWrites(currentBoardConfig(this.boardConfig), plan);
+    // Sent as raw admin messages, not with device.setConfig and friends: those serialize with
+    // the library's older bundled schema, which drops newer fields. See setup.ts.
+    // Everything between begin and commit is applied together on commit.
+    await setupStep("edit session", this.sendAdmin({ case: "beginEditSettings", value: true }));
+    await setupStep("position settings", this.sendAdmin({ case: "setConfig", value: writes.position }));
+    await setupStep("radio region and preset", this.sendAdmin({ case: "setConfig", value: writes.lora }));
+    await setupStep("team channel", this.sendAdmin({ case: "setChannel", value: writes.channel }));
+    await setupStep("battery report heartbeat", this.sendAdmin({ case: "setModuleConfig", value: writes.telemetry }));
+    if (writes.detection) {
+      await setupStep("OK button", this.sendAdmin({ case: "setModuleConfig", value: writes.detection }));
+    }
     // Changing the region makes the board restart to apply it, and it may restart before it
     // acknowledges the commit. A missing answer here is not a failure: the app reconnects
     // and Board setup shows whether the board now matches.
     try {
-      await withTimeout(this.device.commitEditSettings(), COMMIT_WAIT_MS);
+      await withTimeout(this.sendAdmin({ case: "commitEditSettings", value: true }), COMMIT_WAIT_MS);
       return "confirmed";
     } catch (error) {
       const code = routingErrorCode(error);
@@ -218,7 +240,12 @@ export class MeshLink {
   }
 
   private emitBoardSettings(): void {
-    this.emit({ type: "board-settings", settings: summarize(this.boardConfig) });
+    this.emit({ type: "board-settings", settings: summarize(currentBoardConfig(this.boardConfig)) });
+  }
+
+  /** An admin message to the connected board, acknowledged by the board itself. */
+  private sendAdmin(payloadVariant: Parameters<typeof adminBytes>[0]): Promise<number> {
+    return this.device.sendPacket(adminBytes(payloadVariant), Protobuf.Portnums.PortNum.ADMIN_APP, "self");
   }
 
   private whenWritten(): Promise<void> {

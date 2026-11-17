@@ -23,6 +23,8 @@ export type BleEvent =
   | { type: "roster-cleared" }
   /** The connected board's own channel, position, and OK button settings. */
   | { type: "board-settings"; settings: BoardSettings }
+  /** A board's battery report. Percent above 100 means it runs on external power. */
+  | { type: "battery"; id: number; percent: number | null; voltage: number | null }
   /** Someone pressed the OK button on this board (its Detection Sensor fired). */
   | { type: "ok-press"; id: number; text: string }
   /** The node number of the board the phone is connected to. */

@@ -166,6 +166,8 @@ export interface TrackedFollower {
   silent: boolean;
   checkIn: FollowerCheckIn | null;
   lastKnown: LastKnown | null;
+  /** Latest battery report. percent above 100 means external power. */
+  battery: { percent: number | null; at: number } | null;
   /** The last text this board sent, such as its OK button message. */
   lastText: { text: string; at: number } | null;
   /** A group member not heard on the radio yet. Its id is not a real node number. */
@@ -330,6 +332,7 @@ function emptyFollower(member: GroupMember): TrackedFollower {
     checkIn: null,
     lastKnown: null,
     lastText: null,
+    battery: null,
     placeholder: true,
   };
 }
@@ -430,6 +433,7 @@ function upsertTracked(
     checkIn: patch.checkIn !== undefined ? patch.checkIn : (previous?.checkIn ?? null),
     lastKnown: previous?.lastKnown ?? null,
     lastText: patch.lastText !== undefined ? patch.lastText : (previous?.lastText ?? null),
+    battery: patch.battery !== undefined ? patch.battery : (previous?.battery ?? null),
     placeholder: false,
   };
   next.outOfRange = isOutOfRange(next.separationKnown, next.separationM, thresholdMeters);
@@ -843,6 +847,22 @@ export class ExcursionAppClient {
       case "alert":
         this.triggerAlert(event.deviceId, event.status);
         return;
+      case "battery": {
+        const now = this.now();
+        if (event.id === this.state.leaderId) {
+          this.commit({ ...this.state, leaderBatteryPercent: event.percent });
+          return;
+        }
+        if (!this.state.followers.some((follower) => follower.id === event.id)) return;
+        const followers = upsertTracked(
+          this.state.followers,
+          event.id,
+          { battery: { percent: event.percent, at: now }, lastHeardAt: now },
+          this.state.thresholdMeters,
+        );
+        this.commit(projectFollowers({ ...this.state, lastPacketAt: now }, followers, now));
+        return;
+      }
       case "ok-press": {
         const now = this.now();
         if (this.state.followers.some((follower) => follower.id === event.id)) {

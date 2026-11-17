@@ -207,6 +207,26 @@ describe("NativeBleTransport", () => {
     await link.disconnect();
   });
 
+  it("also lists a board this phone is already connected to, which stops advertising", async () => {
+    const central = new FakeCentral() as FakeCentral & {
+      getConnectedDevices?: (services: string[]) => Promise<{ deviceId: string; name?: string }[]>;
+    };
+    central.requestLEScan = async (_options, callback) => {
+      callback({ device: { deviceId: "board-19e8" }, localName: "Meshtastic_19e8" });
+    };
+    central.stopLEScan = async () => undefined;
+    let asked: string[] = [];
+    central.getConnectedDevices = async (services) => {
+      asked = services;
+      return [{ deviceId: "board-a688", name: "Meshtastic_a688" }];
+    };
+    const link = new NativeBleTransport(central);
+    const names: string[] = [];
+    await link.scan((peer) => names.push(peer.name));
+    assert.deepEqual(names, ["Meshtastic_19e8", "Meshtastic_a688"]);
+    assert.deepEqual(asked, [LIVE_SERVICE_UUID]);
+  });
+
   it("connects a scanned board without starting Bluetooth over again", async () => {
     const central = new FakeCentral();
     central.requestLEScan = async (_options, callback) => {

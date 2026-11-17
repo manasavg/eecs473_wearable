@@ -5,6 +5,7 @@ import type { BoardSetupState } from "@/lib/ble/app-client";
 import {
   CHANNEL_NAME_MAX,
   DEFAULT_GPS_UPDATE_SECS,
+  DEFAULT_HEARTBEAT_SECS,
   DEFAULT_POSITION_SECS,
   DEFAULT_REGION,
   REGIONS,
@@ -69,6 +70,7 @@ export function BoardSetup({
         gpsUpdateSecs: DEFAULT_GPS_UPDATE_SECS,
         okButtonPin: pinText.trim() === "" ? null : Number.parseInt(pinText, 10),
         region,
+        heartbeatSecs: DEFAULT_HEARTBEAT_SECS,
       }
     : null;
   const problem = plan ? checkPlan(plan) : "The team key is not valid. Paste the team key or generate a new one.";
@@ -214,7 +216,9 @@ export function BoardSetup({
           />
         </label>
         <p className="text-sm text-neutral-600">
-          Keep the position interval shorter than the lost-contact time. The board also reads its GPS every{" "}
+          Keep the position interval shorter than the lost-contact time. Setup also makes the board report its
+          battery every {DEFAULT_HEARTBEAT_SECS} s, with or without a GPS fix, so it is not flagged as lost
+          indoors. The board also reads its GPS every{" "}
           {DEFAULT_GPS_UPDATE_SECS} s, which uses more battery than Meshtastic&apos;s default. Leave the GPIO blank for
           a board with no OK button wired.
         </p>

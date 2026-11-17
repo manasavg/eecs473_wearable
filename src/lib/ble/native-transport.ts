@@ -89,6 +89,8 @@ export interface NativeCentral {
     namePrefix?: string;
     displayMode?: "alert" | "list";
   }): Promise<NativeDevice>;
+  /** Boards this phone is already connected to. They stop advertising, so a scan misses them. */
+  getConnectedDevices?(services: string[]): Promise<NativeDevice[]>;
   requestLEScan?(
     options: {
       services?: string[];
@@ -187,6 +189,16 @@ export class NativeBleTransport implements BleTransport {
         onPeer({ deviceId: result.device.deviceId, name });
       },
     );
+    // A Meshtastic board stops advertising while anything is connected to it, for example
+    // the Meshtastic app in the background. List the ones this phone already holds too.
+    try {
+      const connected = (await central.getConnectedDevices?.([LIVE_SERVICE_UUID])) ?? [];
+      for (const device of connected) {
+        onPeer({ deviceId: device.deviceId, name: device.name || BLE_NAME_PREFIX });
+      }
+    } catch {
+      /* Not offered on this platform. The scan still runs. */
+    }
   }
 
   async stopScan(): Promise<void> {

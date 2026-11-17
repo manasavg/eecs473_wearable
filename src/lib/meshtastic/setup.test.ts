@@ -160,11 +160,24 @@ describe("differences", () => {
     assert.ok(found.some((item) => /OK button is off/.test(item)));
     assert.ok(found.some((item) => /Region is not set/.test(item)));
 
+    const quiet = summarize({
+      position: boardPosition(),
+      lora: boardLora(),
+      channel: create(Channel.ChannelSchema, {
+        index: 0,
+        settings: create(Channel.ChannelSettingsSchema, { name: "Excursion", psk: new Uint8Array(32).fill(7) }),
+      }),
+      telemetry: create(ModuleConfig.ModuleConfig_TelemetryConfigSchema, { deviceTelemetryEnabled: false }),
+    });
+    assert.ok(differences(quiet, plan()).some((item) => /Battery reports are not sent/.test(item)));
+
     const writes = buildBoardWrites({ position: boardPosition(), lora: boardLora() }, plan());
     if (writes.position.payloadVariant.case !== "position") assert.fail("no position");
     if (writes.detection?.payloadVariant.case !== "detectionSensor") assert.fail("no detection");
     if (writes.lora.payloadVariant.case !== "lora") assert.fail("no lora");
+    if (writes.telemetry.payloadVariant.case !== "telemetry") assert.fail("no telemetry");
     const done = summarize({
+      telemetry: writes.telemetry.payloadVariant.value,
       position: writes.position.payloadVariant.value,
       lora: writes.lora.payloadVariant.value,
       channel: writes.channel,
@@ -247,8 +260,16 @@ describe("MeshLink.setUpBoard", () => {
       "setConfig",
       "setChannel",
       "setModuleConfig",
+      "setModuleConfig",
       "commitEditSettings",
     ]);
+    const modules = admin
+      .map((message) => (message.payloadVariant.case === "setModuleConfig" ? message.payloadVariant.value : null))
+      .filter((value) => value != null);
+    const telemetry = modules.find((value) => value.payloadVariant.case === "telemetry");
+    if (telemetry?.payloadVariant.case !== "telemetry") assert.fail("no telemetry");
+    assert.equal(telemetry.payloadVariant.value.deviceTelemetryEnabled, true);
+    assert.equal(telemetry.payloadVariant.value.deviceUpdateInterval, 60);
     const setConfig = admin.find((message) => message.payloadVariant.case === "setConfig");
     if (setConfig?.payloadVariant.case !== "setConfig") assert.fail("no setConfig");
     const config = setConfig.payloadVariant.value;
@@ -261,5 +282,41 @@ describe("MeshLink.setUpBoard", () => {
     const { link } = simulatedBoard({ step: "setChannel", error: Mesh.Routing_Error.NOT_AUTHORIZED });
     await new Promise((resolve) => setTimeout(resolve, 30));
     await assert.rejects(() => link.setUpBoard(plan()), /did not accept the team channel: Not delivered \(NOT_AUTHORIZED\)/);
+  });
+
+  it("keeps newer settings fields that the library's bundled schema does not know", async () => {
+    const { link, admin, events } = simulatedBoard();
+    // The board reports battery reports on, every 60 s. The library decodes this with its
+    // older bundled schema, which has no deviceTelemetryEnabled field.
+    link.push(
+      toBinary(
+        Mesh.FromRadioSchema,
+        create(Mesh.FromRadioSchema, {
+          payloadVariant: {
+            case: "moduleConfig",
+            value: create(ModuleConfig.ModuleConfigSchema, {
+              payloadVariant: {
+                case: "telemetry",
+                value: create(ModuleConfig.ModuleConfig_TelemetryConfigSchema, {
+                  deviceTelemetryEnabled: true,
+                  deviceUpdateInterval: 60,
+                }),
+              },
+            }),
+          },
+        }),
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const latest = events.filter((event) => event.type === "board-settings").at(-1);
+    assert.ok(latest && latest.type === "board-settings");
+    assert.equal(latest.settings.heartbeatSecs, 60);
+
+    await link.setUpBoard(plan());
+    const written = admin
+      .map((message) => (message.payloadVariant.case === "setModuleConfig" ? message.payloadVariant.value : null))
+      .find((value) => value?.payloadVariant.case === "telemetry");
+    if (written?.payloadVariant.case !== "telemetry") assert.fail("no telemetry write");
+    assert.equal(written.payloadVariant.value.deviceTelemetryEnabled, true);
   });
 });

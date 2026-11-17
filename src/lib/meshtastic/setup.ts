@@ -1,5 +1,57 @@
-import { clone, create } from "@bufbuild/protobuf";
-import { Protobuf } from "@meshtastic/core";
+import { clone, create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { Protobuf as LibraryProtobuf } from "@meshtastic/core";
+import * as Protobuf from "@meshtastic/protobufs";
+
+/*
+ * Settings are built and sent with @meshtastic/protobufs, not with the copy bundled inside
+ * @meshtastic/core. That copy is older: it has no deviceTelemetryEnabled, for one, and
+ * serializing through it silently drops every field it does not know. Messages the library
+ * decoded are converted with toCurrent before use, so newer fields the board sent survive.
+ */
+
+/** Re-read a message the library decoded with its older bundled schema, keeping every field. */
+function toCurrent<Old extends Parameters<typeof toBinary>[1], New extends Parameters<typeof fromBinary>[0]>(
+  oldSchema: Parameters<typeof toBinary>[0],
+  newSchema: New,
+  message: Old | undefined,
+) {
+  if (!message) return undefined;
+  return fromBinary(newSchema, toBinary(oldSchema, message));
+}
+
+/** The board's settings, converted from the library's bundled schema to the current one. */
+export function currentBoardConfig(raw: {
+  channel?: LibraryProtobuf.Channel.Channel;
+  position?: LibraryProtobuf.Config.Config_PositionConfig;
+  detection?: LibraryProtobuf.ModuleConfig.ModuleConfig_DetectionSensorConfig;
+  lora?: LibraryProtobuf.Config.Config_LoRaConfig;
+  telemetry?: LibraryProtobuf.ModuleConfig.ModuleConfig_TelemetryConfig;
+}): CurrentBoardConfig {
+  return {
+    channel: toCurrent(LibraryProtobuf.Channel.ChannelSchema, Protobuf.Channel.ChannelSchema, raw.channel),
+    position: toCurrent(
+      LibraryProtobuf.Config.Config_PositionConfigSchema,
+      Protobuf.Config.Config_PositionConfigSchema,
+      raw.position,
+    ),
+    detection: toCurrent(
+      LibraryProtobuf.ModuleConfig.ModuleConfig_DetectionSensorConfigSchema,
+      Protobuf.ModuleConfig.ModuleConfig_DetectionSensorConfigSchema,
+      raw.detection,
+    ),
+    lora: toCurrent(LibraryProtobuf.Config.Config_LoRaConfigSchema, Protobuf.Config.Config_LoRaConfigSchema, raw.lora),
+    telemetry: toCurrent(
+      LibraryProtobuf.ModuleConfig.ModuleConfig_TelemetryConfigSchema,
+      Protobuf.ModuleConfig.ModuleConfig_TelemetryConfigSchema,
+      raw.telemetry,
+    ),
+  };
+}
+
+/** One admin message for the connected board, serialized with the current schema. */
+export function adminBytes(payloadVariant: Protobuf.Admin.AdminMessage["payloadVariant"]): Uint8Array {
+  return toBinary(Protobuf.Admin.AdminMessageSchema, create(Protobuf.Admin.AdminMessageSchema, { payloadVariant }));
+}
 
 /** Meshtastic channel names must fit in 11 bytes. */
 export const CHANNEL_NAME_MAX = 11;
@@ -9,6 +61,11 @@ export const DEFAULT_POSITION_SECS = 30;
 /** How often the board reads its GPS. Meshtastic's default is 120 s, too slow to keep up with 30 s reports. */
 export const DEFAULT_GPS_UPDATE_SECS = 15;
 export const POSITION_SECS_MIN = 15;
+/**
+ * Battery report interval. It goes out with or without a GPS fix, so it is the heartbeat
+ * that keeps a board from looking lost indoors.
+ */
+export const DEFAULT_HEARTBEAT_SECS = 60;
 export const POSITION_SECS_MAX = 3600;
 /** Meshtastic's default preset, so a board that was never set up still matches. */
 export const TEAM_PRESET = Protobuf.Config.Config_LoRaConfig_ModemPreset.LONG_FAST;
@@ -42,6 +99,8 @@ export interface BoardPlan {
   okButtonPin: number | null;
   /** LoRa region code. Every board must match, and UNSET keeps the radio off. */
   region: number;
+  /** How often the board reports its battery over the radio. Optional for older saved plans. */
+  heartbeatSecs?: number;
 }
 
 /** The settings that matter here, as the connected board reports them. */
@@ -60,6 +119,8 @@ export interface BoardSettings {
   /** Preset in use, or null when the board uses custom radio settings. */
   modemPreset: number | null;
   txEnabled: boolean | null;
+  /** Battery report interval, or 0 when the board does not send it over the radio. Null until read. */
+  heartbeatSecs: number | null;
 }
 
 /** The board's own settings, read during configure. A write replaces a whole group, so these are the base. */
@@ -68,12 +129,14 @@ export interface CurrentBoardConfig {
   position?: Protobuf.Config.Config_PositionConfig;
   detection?: Protobuf.ModuleConfig.ModuleConfig_DetectionSensorConfig;
   lora?: Protobuf.Config.Config_LoRaConfig;
+  telemetry?: Protobuf.ModuleConfig.ModuleConfig_TelemetryConfig;
 }
 
 export interface BoardWrites {
   channel: Protobuf.Channel.Channel;
   position: Protobuf.Config.Config;
   lora: Protobuf.Config.Config;
+  telemetry: Protobuf.ModuleConfig.ModuleConfig;
   detection: Protobuf.ModuleConfig.ModuleConfig | null;
 }
 
@@ -129,6 +192,15 @@ export function buildBoardWrites(current: CurrentBoardConfig, plan: BoardPlan): 
     payloadVariant: { case: "lora", value: loraConfig },
   });
 
+  const telemetryConfig = current.telemetry
+    ? clone(Protobuf.ModuleConfig.ModuleConfig_TelemetryConfigSchema, current.telemetry)
+    : create(Protobuf.ModuleConfig.ModuleConfig_TelemetryConfigSchema);
+  telemetryConfig.deviceTelemetryEnabled = true;
+  telemetryConfig.deviceUpdateInterval = Math.round(plan.heartbeatSecs ?? DEFAULT_HEARTBEAT_SECS);
+  const telemetry = create(Protobuf.ModuleConfig.ModuleConfigSchema, {
+    payloadVariant: { case: "telemetry", value: telemetryConfig },
+  });
+
   let detection: Protobuf.ModuleConfig.ModuleConfig | null = null;
   if (plan.okButtonPin != null) {
     const sensor = current.detection
@@ -148,7 +220,7 @@ export function buildBoardWrites(current: CurrentBoardConfig, plan: BoardPlan): 
     });
   }
 
-  return { channel, position, lora, detection };
+  return { channel, position, lora, telemetry, detection };
 }
 
 /** A message for the first problem with a plan, or null when it is usable. */
@@ -226,6 +298,11 @@ export function summarize(current: CurrentBoardConfig): BoardSettings {
     region: current.lora ? current.lora.region : null,
     modemPreset: current.lora ? (current.lora.usePreset ? current.lora.modemPreset : null) : null,
     txEnabled: current.lora ? current.lora.txEnabled : null,
+    heartbeatSecs: current.telemetry
+      ? current.telemetry.deviceTelemetryEnabled
+        ? current.telemetry.deviceUpdateInterval
+        : 0
+      : null,
   };
 }
 
@@ -241,6 +318,14 @@ export function differences(board: BoardSettings, plan: BoardPlan): string[] {
     out.push(board.modemPreset == null ? "Uses custom radio settings" : `Preset is ${presetName(board.modemPreset)}`);
   }
   if (board.txEnabled === false) out.push("Transmit is turned off");
+  const heartbeat = Math.round(plan.heartbeatSecs ?? DEFAULT_HEARTBEAT_SECS);
+  if (board.heartbeatSecs != null && board.heartbeatSecs !== heartbeat) {
+    out.push(
+      board.heartbeatSecs === 0
+        ? "Battery reports are not sent over the radio"
+        : `Battery report every ${board.heartbeatSecs || "default"} s`,
+    );
+  }
   if (board.channelName !== plan.channelName.trim()) out.push(`Channel is "${board.channelName || "default"}"`);
   if (board.keyBase64 !== bytesToBase64(plan.key)) out.push("Channel key is not the team key");
   if (board.precisionBits !== FULL_PRECISION_BITS) out.push("Position precision is reduced");

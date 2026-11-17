@@ -684,4 +684,23 @@ describe("ExcursionAppClient", () => {
     assert.equal(card?.lastText?.text, "Detected detected");
     await client.disconnect();
   });
+
+  it("shows each board's battery and counts the report as hearing it", async () => {
+    const time = clock();
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient({ now: time.now, silenceSeconds: 60 });
+    await client.connectDevice("beacon", transport);
+    transport.emit({ type: "my-node", id: 0x11 });
+    followerAt(transport, 0xa3, 42.28, time.now());
+    time.advance(55_000);
+    transport.emit({ type: "battery", id: 0xa3, percent: 87, voltage: 4.0 });
+    time.advance(55_000);
+    client.tick();
+    const card = client.getState().followers[0];
+    assert.equal(card?.battery?.percent, 87);
+    assert.equal(card?.silent, false);
+    transport.emit({ type: "battery", id: 0x11, percent: 101, voltage: 4.2 });
+    assert.equal(client.getState().leaderBatteryPercent, 101);
+    await client.disconnect();
+  });
 });

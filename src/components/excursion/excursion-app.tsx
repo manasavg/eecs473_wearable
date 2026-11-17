@@ -584,7 +584,10 @@ export function ExcursionApp() {
             ) : (
               <p className="mt-2 text-4xl">{state.gpsFix === false ? "No fix" : "—"}</p>
             )}
-            <p className="mt-2 text-sm text-neutral-600">This board. The phone is connected to it.</p>
+            <p className="mt-2 text-sm text-neutral-600">
+              This board. The phone is connected to it.
+              {batteryText(state.leaderBatteryPercent) ? ` Battery ${batteryText(state.leaderBatteryPercent)}.` : ""}
+            </p>
           </section>
 
           <button
@@ -598,6 +601,13 @@ export function ExcursionApp() {
       )}
     </main>
   );
+}
+
+/** "87%", "On USB power", or null before the first report. */
+function batteryText(percent: number | null): string | null {
+  if (percent == null) return null;
+  if (percent > 100) return "On USB power";
+  return `${Math.round(percent)}%`;
 }
 
 function checkInText(follower: TrackedFollower, now: number): string {
@@ -676,6 +686,15 @@ function FollowerCard({
             ? "No fix"
             : "—"}
       </p>
+      {follower.battery && batteryText(follower.battery.percent) && (
+        <p
+          className={`mt-2 text-sm ${
+            (follower.battery.percent ?? 100) < 20 ? "text-red-700" : "text-neutral-600"
+          }`}
+        >
+          Battery {batteryText(follower.battery.percent)} · {ago(follower.battery.at, now)}
+        </p>
+      )}
       {follower.lastText && (
         <p className="mt-2 text-sm text-neutral-600">
           Last message: &ldquo;{follower.lastText.text}&rdquo; · {ago(follower.lastText.at, now)}
