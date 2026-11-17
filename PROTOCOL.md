@@ -103,7 +103,7 @@ Each follower card has its own Check in button. Check in all sends one to every 
 
 An acknowledgement from the leader itself does not count. That only means another radio repeated the message.
 
-A press is any text from that board with the word `OK` in it, such as `OK detected` from the button below. Each card shows the last message its board sent, so you can see what a press actually sends. It counts only while that board has a check-in open, and a late press still turns the card OK. Presses with no open check-in are ignored.
+A press is a Detection Sensor message from that board, which is what the button below sends, whatever the module is named. The module sends it as its own message type, not as a text message. A text with the word `OK` in it also counts. Each card shows the last message its board sent, so you can see what a press actually sends. It counts only while that board has a check-in open, and a late press still turns the card OK. Presses with no open check-in are ignored.
 
 The phone sends a notification when a check-in ends as No OK pressed, No answer, or Not delivered.
 

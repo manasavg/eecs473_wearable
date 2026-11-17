@@ -665,4 +665,21 @@ describe("ExcursionAppClient", () => {
     assert.equal(client.getState().followers[0]?.checkIn?.status, "ok");
     await client.disconnect();
   });
+
+  it("confirms a check-in on an OK button press whatever the button is named", async () => {
+    const transport = new ScriptedTransport();
+    const client = new ExcursionAppClient();
+    await client.connectDevice("beacon", transport);
+    followerAt(transport, 0x19e8, 42.28, Date.now());
+    await client.sendCheckIn(0x19e8);
+    transport.emit({ type: "checkin-sent", id: 0x19e8, packetId: 41 });
+    transport.emit({ type: "checkin-ack", id: 0x19e8, packetId: 41 });
+    assert.equal(client.getState().followers[0]?.checkIn?.status, "received");
+    transport.emit({ type: "ok-press", id: 0x19e8, text: "Detected detected" });
+    const card = client.getState().followers[0];
+    assert.equal(card?.checkIn?.status, "ok");
+    assert.equal(card?.checkIn?.confirmedBy, "person");
+    assert.equal(card?.lastText?.text, "Detected detected");
+    await client.disconnect();
+  });
 });

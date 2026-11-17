@@ -125,6 +125,15 @@ export class MeshLink {
       if (!text) return;
       this.emit(live({ text, fromId: from, okId: isOkText(text) ? from : null }));
     });
+    // The OK button: Meshtastic's Detection Sensor module sends "<name> detected" as its own
+    // message type, not as a text message, so it never reaches onMessagePacket.
+    // Any detection from a follower is a press, whatever name the module was given.
+    this.device.events.onDetectionSensorPacket.subscribe((packet: { from: number; data: Uint8Array }) => {
+      const from = packet.from >>> 0;
+      if (from === this.myNode || from < FIRST_NODE || this.rejected.has(from)) return;
+      const text = new TextDecoder().decode(packet.data).replace(/[\u0000-\u001f\u007f]/g, "").trim();
+      this.emit({ type: "ok-press", id: from, text: text || "button pressed" });
+    });
   }
 
   /** One FromRadio protobuf from the radio's queue. */

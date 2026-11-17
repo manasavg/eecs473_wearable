@@ -240,4 +240,31 @@ describe("MeshLink", () => {
     await settle();
     assert.ok(events.some((event) => event.type === "node-seen" && event.id === 0xa3));
   });
+
+  it("turns a Detection Sensor packet from the OK button into a press", async () => {
+    const { link, events } = await listen();
+    link.push(fromRadio({ case: "myInfo", value: create(Mesh.MyNodeInfoSchema, { myNodeNum: 0x11 }) }));
+    link.push(
+      fromRadio({
+        case: "packet",
+        value: create(Mesh.MeshPacketSchema, {
+          from: 0x19e8,
+          to: 0xffffffff,
+          id: 5555,
+          payloadVariant: {
+            case: "decoded",
+            value: create(Mesh.DataSchema, {
+              portnum: Portnums.PortNum.DETECTION_SENSOR_APP,
+              payload: new TextEncoder().encode("OK detected"),
+            }),
+          },
+        }),
+      }),
+    );
+    await settle();
+    const press = events.find((event) => event.type === "ok-press");
+    assert.ok(press && press.type === "ok-press");
+    assert.equal(press.id, 0x19e8);
+    assert.equal(press.text, "OK detected");
+  });
 });

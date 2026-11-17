@@ -843,6 +843,20 @@ export class ExcursionAppClient {
       case "alert":
         this.triggerAlert(event.deviceId, event.status);
         return;
+      case "ok-press": {
+        const now = this.now();
+        if (this.state.followers.some((follower) => follower.id === event.id)) {
+          const followers = upsertTracked(
+            this.state.followers,
+            event.id,
+            { lastText: { text: event.text, at: now }, lastHeardAt: now },
+            this.state.thresholdMeters,
+          );
+          this.commit(projectFollowers({ ...this.state, lastPacketAt: now }, followers, now));
+        }
+        this.confirmCheckIn(event.id);
+        return;
+      }
       case "my-node": {
         const next = { ...this.state, leaderId: event.id };
         this.commit(projectFollowers(next, this.state.followers, this.now()));
