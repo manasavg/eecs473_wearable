@@ -209,9 +209,13 @@ export function buildBoardWrites(current: CurrentBoardConfig, plan: BoardPlan): 
     sensor.enabled = true;
     sensor.monitorPin = plan.okButtonPin;
     sensor.name = "OK";
-    sensor.detectionTriggerType = Protobuf.ModuleConfig.ModuleConfig_DetectionSensorConfig_TriggerType.FALLING_EDGE;
+    // Either edge: the board reports the press and the release, so the app can time a hold
+    // for the emergency alert. Active low: pressed joins the pin to GND.
+    sensor.detectionTriggerType =
+      Protobuf.ModuleConfig.ModuleConfig_DetectionSensorConfig_TriggerType.EITHER_EDGE_ACTIVE_LOW;
     sensor.usePullup = true;
-    sensor.minimumBroadcastSecs = 5;
+    // Short, so the release of a 3 s hold is not held back behind the press.
+    sensor.minimumBroadcastSecs = 1;
     // 0 turns off the periodic state message, so the board never sends OK without a press.
     sensor.stateBroadcastSecs = 0;
     sensor.sendBell = false;

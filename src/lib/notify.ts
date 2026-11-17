@@ -51,6 +51,10 @@ export function notifySilent(who: string, seconds: number, lastKnown: string | n
   return notify(`Lost contact with ${who}`, lastKnown ? `${body} Its ${lastKnown}.` : body);
 }
 
+export function notifyEmergency(who: string, detail: string): Promise<void> {
+  return notify(`EMERGENCY: ${who}`, detail);
+}
+
 export function notifyLinkLost(board: string | null): Promise<void> {
   return notify(
     "Lost the leader board",

@@ -134,6 +134,26 @@ export function isInGroup(state: Pick<AppState, "group">, id: number): boolean {
   return state.group.some((member) => member.suffix === suffix);
 }
 
+/** Hold the OK button this long for an emergency. */
+export const EMERGENCY_HOLD_MS = 3000;
+/**
+ * A press with no release heard by now is treated as a hold. Only for a board already seen
+ * reporting a release, so a board set up the old way, which never reports one, does not
+ * raise an emergency on every OK press.
+ */
+export const EMERGENCY_NO_RELEASE_MS = 8000;
+
+/** Someone asked for help. Stays on screen until acknowledged. */
+export interface Emergency {
+  id: number;
+  name: string;
+  at: number;
+  /** "hold": the OK button was held. "message": the board sent SOS, EMERGENCY or HELP. */
+  how: "hold" | "message";
+  text: string;
+  lastKnown: LastKnown | null;
+}
+
 export interface BoardSetupState {
   status: "idle" | "working" | "done" | "error";
   message: string | null;
@@ -199,6 +219,8 @@ export interface AppState {
   leaderId: number | null;
   /** The team's boards. Empty means show every board heard. */
   group: GroupMember[];
+  /** Open emergencies, newest first. Kept across reconnects until acknowledged. */
+  emergencies: Emergency[];
   boardSetup: BoardSetupState;
   /** When this link came up. Silence counts from here for a board never heard. */
   connectedAt: number | null;
@@ -250,6 +272,7 @@ export function createInitialState(
     board: null,
     leaderId: null,
     group: [],
+    emergencies: [],
     boardSetup: { status: "idle", message: null },
     connectedAt: null,
     members: [],
@@ -477,6 +500,11 @@ export class ExcursionAppClient {
   private ticker: ReturnType<typeof setInterval> | null = null;
   private readonly now: () => number;
   private readonly remembered = new Map<number, LastKnown>();
+  /** When each board's button went down, until its release arrives. */
+  private readonly holds = new Map<number, number>();
+  /** Boards seen reporting a release. Only these get the no-release fallback. */
+  private readonly reportsRelease = new Set<number>();
+  private holdTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(initial?: {
     thresholdMeters?: number;
@@ -496,7 +524,42 @@ export class ExcursionAppClient {
     return {
       ...createInitialState(this.state.thresholdMeters, this.state.silenceSeconds, this.state.requireConfirm),
       group: this.state.group,
+      emergencies: this.state.emergencies,
     };
+  }
+
+  /** Clear an emergency once someone has dealt with it. */
+  acknowledgeEmergency(id: number): void {
+    if (!this.state.emergencies.some((item) => item.id === id)) return;
+    this.commit({ ...this.state, emergencies: this.state.emergencies.filter((item) => item.id !== id) });
+  }
+
+  private raiseEmergency(id: number, how: Emergency["how"], text: string): void {
+    if (id === this.state.leaderId || !isInGroup(this.state, id)) return;
+    const now = this.now();
+    const follower = this.state.followers.find((item) => item.id === id);
+    const emergency: Emergency = {
+      id,
+      name: follower?.name || `Board ${(id >>> 0).toString(16).toUpperCase()}`,
+      at: now,
+      how,
+      text,
+      lastKnown: follower?.lastKnown ?? this.remembered.get(id) ?? null,
+    };
+    this.commit(
+      { ...this.state, emergencies: [emergency, ...this.state.emergencies.filter((item) => item.id !== id)] },
+      { id: nextId(), at: now, kind: "help", deviceId: id, message: text },
+    );
+  }
+
+  /** Turn a press whose release never arrived into an emergency. */
+  private checkHolds(): void {
+    const now = this.now();
+    for (const [id, start] of [...this.holds]) {
+      if (!this.reportsRelease.has(id) || now - start < EMERGENCY_NO_RELEASE_MS) continue;
+      this.holds.delete(id);
+      this.raiseEmergency(id, "hold", "Held the OK button. No release heard.");
+    }
   }
 
   /** Replace the team's boards. Members not heard yet get an empty card. */
@@ -665,6 +728,7 @@ export class ExcursionAppClient {
   tick(): void {
     if (this.state.connection !== "connected" && this.state.connection !== "reconnecting") return;
     const now = this.now();
+    this.checkHolds();
     const next = projectFollowers(this.state, expireCheckIns(this.state.followers, now), now);
     const changed = next.followers.some((follower, index) => follower !== this.state.followers[index]);
     if (changed) this.commit(next);
@@ -874,9 +938,26 @@ export class ExcursionAppClient {
           );
           this.commit(projectFollowers({ ...this.state, lastPacketAt: now }, followers, now));
         }
+        if (event.edge === "release") {
+          // The release is not a second OK. It ends a hold: 3 s or more is an emergency.
+          this.reportsRelease.add(event.id);
+          const start = this.holds.get(event.id);
+          this.holds.delete(event.id);
+          if (start != null && now - start >= EMERGENCY_HOLD_MS) {
+            this.raiseEmergency(event.id, "hold", `Held the OK button for ${Math.round((now - start) / 1000)} s.`);
+          }
+          return;
+        }
+        this.holds.set(event.id, now);
+        if (this.holdTimer) clearTimeout(this.holdTimer);
+        this.holdTimer = setTimeout(() => this.checkHolds(), EMERGENCY_NO_RELEASE_MS + 100);
+        (this.holdTimer as { unref?: () => void }).unref?.();
         this.confirmCheckIn(event.id);
         return;
       }
+      case "emergency":
+        this.raiseEmergency(event.id, "message", event.text);
+        return;
       case "my-node": {
         const next = { ...this.state, leaderId: event.id };
         this.commit(projectFollowers(next, this.state.followers, this.now()));
@@ -1223,6 +1304,9 @@ export class ExcursionAppClient {
   private release(): void {
     if (this.ticker) clearInterval(this.ticker);
     this.ticker = null;
+    if (this.holdTimer) clearTimeout(this.holdTimer);
+    this.holdTimer = null;
+    this.holds.clear();
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.transport = null;

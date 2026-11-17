@@ -26,7 +26,9 @@ export type BleEvent =
   /** A board's battery report. Percent above 100 means it runs on external power. */
   | { type: "battery"; id: number; percent: number | null; voltage: number | null }
   /** Someone pressed the OK button on this board (its Detection Sensor fired). */
-  | { type: "ok-press"; id: number; text: string }
+  | { type: "ok-press"; id: number; text: string; edge: "press" | "release" | null }
+  /** A board sent a message asking for help, such as SOS. */
+  | { type: "emergency"; id: number; text: string }
   /** The node number of the board the phone is connected to. */
   | { type: "my-node"; id: number }
   /** A board heard for the first time, before its position or name. */

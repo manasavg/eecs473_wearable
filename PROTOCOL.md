@@ -125,9 +125,9 @@ Stock Meshtastic can send a text when a pin changes, through its **Detection Sen
 | Enabled | On |
 | Monitor pin | The GPIO the button is wired to |
 | Friendly name | `OK`, so the message is `OK detected` |
-| Trigger type | Falling edge or logic low (the button pulls the pin to GND) |
+| Trigger type | Either edge, active low, so the board reports the press and the release |
 | Use pull-up | On |
-| Minimum broadcast interval | Short, for example 5 s, so a second press is not dropped |
+| Minimum broadcast interval | 1 s, so the release of a 3 s hold is not held back |
 | State broadcast interval | 0 (off), so the board never sends `OK` without a press |
 
 Do not use a pin the board already uses. Board setup refuses the ones it knows: GPIO 0 (PRG button), 1, 3, 8–14 (LoRa radio), 17, 18, 21 (screen), 19, 20 (USB), 26–37 (flash, PSRAM, LED, power), 38, 39 (GPS), 45, 46. Pins likely free on the header: 2, 4, 5, 6, 7, 40, 41, 42, 47, 48.
@@ -140,6 +140,24 @@ If a press does nothing:
 4. Send a check-in, press, and look for a "Last message" line on that board's card. If it is there but the card stays Received, the message has no "OK" in it; tell us what it says. Check the Heltec V4 pinout for a free pin. Setting names can vary slightly between firmware versions. Test one press with the Meshtastic app open on the leader before relying on it: an `OK detected` message should appear.
 
 The module sends the text to the whole channel, which is another reason to use a private channel.
+
+## Emergency
+
+Holding a follower's OK button for 3 seconds raises an emergency. Stock Meshtastic does not time button presses, so the app does: Board setup sets the Detection Sensor to report both edges, and the app measures the time from the press message to the release message.
+
+| Hold | Result |
+| --- | --- |
+| Under 3 s | A normal OK press |
+| 3 s or more | Emergency |
+| Press, then no release heard within 8 s | Emergency, but only for a board already seen sending a release |
+
+The last rule covers a release lost on the radio. It applies only to boards that have sent a release before, so a board set up the old way, which reports only presses, never raises an emergency by mistake.
+
+A text that starts with SOS, EMERGENCY or HELP also raises one.
+
+An emergency shows as a red banner at the top with the board's name, the time, and its last known location with an Open in Maps link. Its card turns red and the phone sends a notification. It stays, across reconnects, until someone taps Acknowledge. Emergencies from boards outside the group are ignored.
+
+To check a board reports releases: connected to the leader, hold the follower's button and let go. The card's Last message should change to something like `OK state: 0` after the release. If it only ever shows the press, run Board setup on that follower again and restart it.
 
 ## Board settings
 

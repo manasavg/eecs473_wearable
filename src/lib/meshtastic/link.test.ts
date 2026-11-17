@@ -294,4 +294,15 @@ describe("MeshLink", () => {
     await settle();
     assert.ok(second.some((event) => event.type === "checkin-ack" && event.packetId === packetId));
   });
+
+  it("reads press and release from the button, and SOS as an emergency", async () => {
+    const { buttonEdge, isEmergencyText } = await import("./link.ts");
+    assert.equal(buttonEdge("OK state: 1"), "press");
+    assert.equal(buttonEdge("OK state: 0"), "release");
+    assert.equal(buttonEdge("OK detected"), "press");
+    assert.equal(buttonEdge("hello"), null);
+    assert.equal(isEmergencyText("SOS"), true);
+    assert.equal(isEmergencyText("help me"), true);
+    assert.equal(isEmergencyText("no help needed"), false);
+  });
 });

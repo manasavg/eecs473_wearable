@@ -95,7 +95,12 @@ describe("buildBoardWrites", () => {
     assert.equal(sensor.name, "OK");
     assert.equal(sensor.usePullup, true);
     assert.equal(sensor.stateBroadcastSecs, 0);
-    assert.equal(sensor.detectionTriggerType, ModuleConfig.ModuleConfig_DetectionSensorConfig_TriggerType.FALLING_EDGE);
+    // Both edges, so the app can time a 3 s hold for the emergency alert.
+    assert.equal(
+      sensor.detectionTriggerType,
+      ModuleConfig.ModuleConfig_DetectionSensorConfig_TriggerType.EITHER_EDGE_ACTIVE_LOW,
+    );
+    assert.equal(sensor.minimumBroadcastSecs, 1);
   });
 
   it("leaves the OK button alone when no pin is given", () => {

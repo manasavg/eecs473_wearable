@@ -133,6 +133,7 @@ export class MeshLink {
       const text = packet.data.replace(/[\u0000-\u001f\u007f]/g, "").trim();
       if (!text) return;
       this.emit(live({ text, fromId: from, okId: isOkText(text) ? from : null }));
+      if (isEmergencyText(text)) this.emit({ type: "emergency", id: from, text });
     });
     // Battery reports. They double as the heartbeat; onHeard already counts the packet.
     this.device.events.onTelemetryPacket.subscribe(
@@ -156,7 +157,7 @@ export class MeshLink {
       const from = packet.from >>> 0;
       if (from === this.myNode || from < FIRST_NODE || this.rejected.has(from)) return;
       const text = new TextDecoder().decode(packet.data).replace(/[\u0000-\u001f\u007f]/g, "").trim();
-      this.emit({ type: "ok-press", id: from, text: text || "button pressed" });
+      this.emit({ type: "ok-press", id: from, text: text || "button pressed", edge: buttonEdge(text) });
     });
   }
 
@@ -484,6 +485,23 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
       },
     );
   });
+}
+
+/**
+ * Which way the button moved, from the Detection Sensor text. With an either-edge trigger
+ * the module sends its state on each change, as "<name> state: 1" pressed and "... 0" released.
+ * A plain "<name> detected" is a press. Null when the text says neither.
+ */
+export function buttonEdge(text: string): "press" | "release" | null {
+  const state = /state:\s*([01])/i.exec(text);
+  if (state) return state[1] === "1" ? "press" : "release";
+  if (/detected/i.test(text)) return "press";
+  return null;
+}
+
+/** A text that asks for help: it starts with SOS, EMERGENCY or HELP. */
+export function isEmergencyText(text: string): boolean {
+  return /^(SOS|EMERGENCY|HELP)\b/i.test(text.trim());
 }
 
 /**

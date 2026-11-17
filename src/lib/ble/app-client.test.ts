@@ -703,4 +703,81 @@ describe("ExcursionAppClient", () => {
     assert.equal(client.getState().leaderBatteryPercent, 101);
     await client.disconnect();
   });
+
+  describe("emergency", () => {
+    async function setup() {
+      const time = clock();
+      const transport = new ScriptedTransport();
+      const client = new ExcursionAppClient({ now: time.now });
+      await client.connectDevice("beacon", transport);
+      transport.emit({ type: "my-node", id: 0x11 });
+      followerAt(transport, 0x19e8, 42.281, time.now());
+      const press = () => transport.emit({ type: "ok-press", id: 0x19e8, text: "OK state: 1", edge: "press" });
+      const release = () => transport.emit({ type: "ok-press", id: 0x19e8, text: "OK state: 0", edge: "release" });
+      return { time, transport, client, press, release };
+    }
+
+    it("raises an emergency when the button is held 3 s, with the last known location", async () => {
+      const { time, client, press, release } = await setup();
+      press();
+      time.advance(3_400);
+      release();
+      const [emergency] = client.getState().emergencies;
+      assert.equal(emergency?.id, 0x19e8);
+      assert.equal(emergency?.how, "hold");
+      assert.equal(emergency?.name, "Board 6632");
+      assert.equal(emergency?.lastKnown?.lat, 42.281);
+      client.acknowledgeEmergency(0x19e8);
+      assert.equal(client.getState().emergencies.length, 0);
+      await client.disconnect();
+    });
+
+    it("treats a short press as OK, not an emergency", async () => {
+      const { time, client, press, release } = await setup();
+      await client.sendCheckIn(0x19e8);
+      press();
+      time.advance(900);
+      release();
+      assert.equal(client.getState().emergencies.length, 0);
+      assert.equal(client.getState().followers[0]?.checkIn?.status, "ok");
+      await client.disconnect();
+    });
+
+    it("raises it when the release never arrives, once the board is known to send releases", async () => {
+      const { time, client, press, release } = await setup();
+      press();
+      time.advance(500);
+      release();
+      press();
+      time.advance(8_500);
+      client.tick();
+      assert.equal(client.getState().emergencies[0]?.how, "hold");
+      await client.disconnect();
+    });
+
+    it("never guesses a hold for a board that has not reported a release", async () => {
+      const { time, client, press } = await setup();
+      press();
+      time.advance(20_000);
+      client.tick();
+      assert.equal(client.getState().emergencies.length, 0);
+      await client.disconnect();
+    });
+
+    it("raises one for an SOS message and keeps it across a reconnect", async () => {
+      const { transport, client } = await setup();
+      transport.emit({ type: "emergency", id: 0x19e8, text: "SOS" });
+      assert.equal(client.getState().emergencies[0]?.how, "message");
+      await client.disconnect();
+      assert.equal(client.getState().emergencies.length, 1);
+    });
+
+    it("ignores emergencies from boards outside the group", async () => {
+      const { transport, client } = await setup();
+      client.setGroup([{ suffix: "19e8", name: "Ours" }]);
+      transport.emit({ type: "emergency", id: 0x7777, text: "SOS" });
+      assert.equal(client.getState().emergencies.length, 0);
+      await client.disconnect();
+    });
+  });
 });

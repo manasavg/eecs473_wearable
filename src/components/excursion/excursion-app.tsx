@@ -24,6 +24,7 @@ import { boardLabel, formatGpsDegrees, formatSeparation } from "@/lib/format";
 import {
   ensureNotifyPermission,
   formatDuration,
+  notifyEmergency,
   notifyLinkLost,
   notifyNoAnswer,
   notifyOutOfRange,
@@ -79,6 +80,7 @@ export function ExcursionApp() {
   const [confirmDraft, setConfirmDraft] = useState(state.requireConfirm);
   const [looked, setLooked] = useState(false);
   const lastConnection = useRef(state.connection);
+  const announced = useRef<Record<number, number>>({});
   const seen = useRef<Record<number, { out: boolean; silent: boolean; checkIn: CheckInStatus | null }>>({});
 
   useEffect(() => {
@@ -98,6 +100,20 @@ export function ExcursionApp() {
   useEffect(() => {
     setConfirmDraft(state.requireConfirm);
   }, [state.requireConfirm]);
+
+  // One notification for each new emergency.
+  useEffect(() => {
+    const next: Record<number, number> = {};
+    for (const emergency of state.emergencies) {
+      next[emergency.id] = emergency.at;
+      if (announced.current[emergency.id] === emergency.at) continue;
+      const where = emergency.lastKnown
+        ? ` Last known ${formatGpsDegrees(emergency.lastKnown.lat)}, ${formatGpsDegrees(emergency.lastKnown.lon)}.`
+        : "";
+      void notifyEmergency(emergency.name, `${emergency.text}${where}`);
+    }
+    announced.current = next;
+  }, [state.emergencies]);
 
   // The phone lost the leader and gave up reconnecting: every other alert stops with it.
   useEffect(() => {
@@ -321,6 +337,41 @@ export function ExcursionApp() {
         </div>
       ) : (
         <div className="mt-6 flex flex-col gap-6">
+          {state.emergencies.map((emergency) => (
+            <div
+              key={`emergency-${emergency.id}`}
+              className="border-4 border-red-800 bg-red-700 px-3 py-3 text-white"
+              role="alert"
+              aria-live="assertive"
+            >
+              <p className="text-lg font-bold">EMERGENCY · {emergency.name}</p>
+              <p className="mt-1 text-sm">
+                {emergency.how === "hold" ? "Held their button. " : `Sent "${emergency.text}". `}
+                {clockTime(emergency.at, now)} · {ago(emergency.at, now)}
+              </p>
+              {emergency.lastKnown && (
+                <p className="mt-1 text-sm tabular-nums">
+                  Last known {formatGpsDegrees(emergency.lastKnown.lat)}, {formatGpsDegrees(emergency.lastKnown.lon)} at{" "}
+                  {clockTime(emergency.lastKnown.at, now)} ·{" "}
+                  <a
+                    className="underline"
+                    href={`https://maps.apple.com/?ll=${emergency.lastKnown.lat},${emergency.lastKnown.lon}&q=${encodeURIComponent(emergency.name)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open in Maps
+                  </a>
+                </p>
+              )}
+              <button
+                type="button"
+                className="mt-3 h-11 w-full border border-white bg-white font-medium text-red-800"
+                onClick={() => app.acknowledgeEmergency(emergency.id)}
+              >
+                Acknowledge
+              </button>
+            </div>
+          ))}
           {(silentFollowers.length > 0 || outFollowers.length > 0) && (
             <div className="border border-red-700 bg-red-50 px-3 py-3 text-sm text-red-800" role="alert">
               {silentFollowers.map((follower) => (
@@ -453,6 +504,7 @@ export function ExcursionApp() {
                   now={now}
                   linked={linked}
                   onCheckIn={() => void app.checkIn(follower.id)}
+                  emergency={state.emergencies.some((item) => item.id === follower.id)}
                   groupAction={
                     grouped
                       ? {
@@ -638,6 +690,7 @@ function FollowerCard({
   now,
   linked,
   onCheckIn,
+  emergency,
   groupAction,
   leaderFix,
   leaderLat,
@@ -648,6 +701,7 @@ function FollowerCard({
   now: number;
   linked: boolean;
   onCheckIn: () => void;
+  emergency: boolean;
   groupAction: { label: string; onClick: () => void };
   leaderFix: boolean | null;
   leaderLat: number | null;
@@ -671,7 +725,12 @@ function FollowerCard({
   const busy = status === "sending" || status === "waiting" || status === "received";
 
   return (
-    <article className={`border px-3 py-3 ${alarm ? "border-red-700" : "border-neutral-200"}`}>
+    <article
+      className={`border px-3 py-3 ${
+        emergency ? "border-4 border-red-700 bg-red-50" : alarm ? "border-red-700" : "border-neutral-200"
+      }`}
+    >
+      {emergency && <p className="mb-2 text-sm font-bold text-red-700">EMERGENCY</p>}
       <div className="flex items-baseline justify-between gap-2">
         <h3 className="text-sm font-medium">{label}</h3>
         <p className={`text-sm ${follower.silent ? "text-red-700" : "text-neutral-600"}`}>

@@ -160,6 +160,7 @@ export function useExcursion() {
 
   return {
     state,
+    acknowledgeEmergency: (id: number) => client.acknowledgeEmergency(id),
     setGroup,
     setUpBoard,
     rememberedName,
