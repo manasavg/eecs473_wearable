@@ -190,6 +190,8 @@ export interface TrackedFollower {
   battery: { percent: number | null; at: number } | null;
   /** The last text this board sent, such as its OK button message. */
   lastText: { text: string; at: number } | null;
+  /** The last few texts and button messages, newest first, to see what a press or hold sends. */
+  recentTexts: Array<{ text: string; at: number }>;
   /** A group member not heard on the radio yet. Its id is not a real node number. */
   placeholder: boolean;
 }
@@ -355,6 +357,7 @@ function emptyFollower(member: GroupMember): TrackedFollower {
     checkIn: null,
     lastKnown: null,
     lastText: null,
+    recentTexts: [],
     battery: null,
     placeholder: true,
   };
@@ -436,7 +439,7 @@ function latest(a: number | null, b: number | null | undefined): number | null {
 function upsertTracked(
   followers: TrackedFollower[],
   id: number,
-  patch: Partial<Omit<TrackedFollower, "id" | "outOfRange" | "silent" | "placeholder">>,
+  patch: Partial<Omit<TrackedFollower, "id" | "outOfRange" | "silent" | "placeholder" | "recentTexts">>,
   thresholdMeters: number,
 ): TrackedFollower[] {
   const previous = followers.find((follower) => follower.id === id);
@@ -456,6 +459,9 @@ function upsertTracked(
     checkIn: patch.checkIn !== undefined ? patch.checkIn : (previous?.checkIn ?? null),
     lastKnown: previous?.lastKnown ?? null,
     lastText: patch.lastText !== undefined ? patch.lastText : (previous?.lastText ?? null),
+    recentTexts: patch.lastText
+      ? [patch.lastText, ...(previous?.recentTexts ?? [])].slice(0, 6)
+      : (previous?.recentTexts ?? []),
     battery: patch.battery !== undefined ? patch.battery : (previous?.battery ?? null),
     placeholder: false,
   };

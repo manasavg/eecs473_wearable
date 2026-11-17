@@ -759,6 +759,23 @@ function FollowerCard({
           Last message: &ldquo;{follower.lastText.text}&rdquo; · {ago(follower.lastText.at, now)}
         </p>
       )}
+      {follower.recentTexts.length > 1 && (
+        <details className="mt-1 text-xs text-neutral-600">
+          <summary className="cursor-pointer">Button log</summary>
+          <ul className="mt-1 font-mono">
+            {follower.recentTexts.map((item, index) => {
+              const older = follower.recentTexts[index + 1];
+              return (
+                <li key={`${item.at}-${index}`}>
+                  {new Date(item.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}.
+                  {String(Math.floor((item.at % 1000) / 100))} &ldquo;{item.text}&rdquo;
+                  {older ? ` · +${((item.at - older.at) / 1000).toFixed(1)} s` : ""}
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+      )}
       {follower.placeholder && (
         <p className="mt-1 text-sm text-neutral-600">
           In your group, but the leader has not heard it on the radio. Check that it is on, has its antenna, and
