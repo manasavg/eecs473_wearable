@@ -743,16 +743,38 @@ describe("ExcursionAppClient", () => {
       await client.disconnect();
     });
 
-    it("raises it when the release never arrives, once the board is known to send releases", async () => {
+    it("goes off while the button is still held, without waiting for the release", async () => {
       const { time, client, press, release } = await setup();
       press();
       time.advance(500);
       release();
       press();
-      time.advance(8_500);
+      time.advance(3_900);
+      client.tick();
+      assert.equal(client.getState().emergencies.length, 0);
+      time.advance(200);
       client.tick();
       assert.equal(client.getState().emergencies[0]?.how, "hold");
+      // Letting go afterwards does not raise a second one.
+      time.advance(3_000);
+      release();
+      assert.equal(client.getState().emergencies.length, 1);
       await client.disconnect();
+    });
+
+    it("counts every hold length past 3 s", async () => {
+      for (const holdMs of [3_200, 4_500, 6_000, 7_500]) {
+        const { time, client, press, release } = await setup();
+        press();
+        time.advance(400);
+        release();
+        press();
+        time.advance(holdMs);
+        client.tick();
+        release();
+        assert.equal(client.getState().emergencies.length, 1, `hold of ${holdMs} ms`);
+        await client.disconnect();
+      }
     });
 
     it("never guesses a hold for a board that has not reported a release", async () => {

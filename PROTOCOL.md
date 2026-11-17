@@ -148,10 +148,10 @@ Holding a follower's OK button for 3 seconds raises an emergency. Stock Meshtast
 | Hold | Result |
 | --- | --- |
 | Under 3 s | A normal OK press |
-| 3 s or more | Emergency |
-| Press, then no release heard within 8 s | Emergency, but only for a board already seen sending a release |
+| Still held 4 s after the press arrived | Emergency, while the button is still down |
+| Released, and the release came 3 s or more after the press | Emergency |
 
-The last rule covers a release lost on the radio. It applies only to boards that have sent a release before, so a board set up the old way, which reports only presses, never raises an emergency by mistake.
+The alert goes off while the button is held; it does not wait for the release. The extra second covers a quick tap's release still crossing the radio, which takes about a second. This applies only to boards already seen sending a release, so a board set up the old way, which reports only presses, never raises an emergency on an OK press. If a quick tap's release is lost on the radio, that tap can raise a false emergency.
 
 A text that starts with SOS, EMERGENCY or HELP also raises one.
 

@@ -134,14 +134,15 @@ export function isInGroup(state: Pick<AppState, "group">, id: number): boolean {
   return state.group.some((member) => member.suffix === suffix);
 }
 
-/** Hold the OK button this long for an emergency. */
+/** Hold the OK button longer than this for an emergency. */
 export const EMERGENCY_HOLD_MS = 3000;
 /**
- * A press with no release heard by now is treated as a hold. Only for a board already seen
- * reporting a release, so a board set up the old way, which never reports one, does not
- * raise an emergency on every OK press.
+ * The alert fires this long after the press arrives if no release has, while the button is
+ * still down. The extra second covers the release of a quick tap still crossing the radio.
+ * Only for a board already seen reporting a release, so a board set up the old way, which
+ * never reports one, does not raise an emergency on every OK press.
  */
-export const EMERGENCY_NO_RELEASE_MS = 8000;
+export const EMERGENCY_NO_RELEASE_MS = 4000;
 
 /** Someone asked for help. Stays on screen until acknowledged. */
 export interface Emergency {
@@ -510,7 +511,8 @@ export class ExcursionAppClient {
   private readonly holds = new Map<number, number>();
   /** Boards seen reporting a release. Only these get the no-release fallback. */
   private readonly reportsRelease = new Set<number>();
-  private holdTimer: ReturnType<typeof setTimeout> | null = null;
+  /** One timer per board whose button is down, firing at EMERGENCY_NO_RELEASE_MS. */
+  private readonly holdTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
   constructor(initial?: {
     thresholdMeters?: number;
@@ -558,14 +560,21 @@ export class ExcursionAppClient {
     );
   }
 
-  /** Turn a press whose release never arrived into an emergency. */
+  /** Raise the alert for a button still down past the hold time. */
   private checkHolds(): void {
     const now = this.now();
     for (const [id, start] of [...this.holds]) {
       if (!this.reportsRelease.has(id) || now - start < EMERGENCY_NO_RELEASE_MS) continue;
-      this.holds.delete(id);
-      this.raiseEmergency(id, "hold", "Held the OK button. No release heard.");
+      this.clearHold(id);
+      this.raiseEmergency(id, "hold", "Holding the OK button.");
     }
+  }
+
+  private clearHold(id: number): void {
+    this.holds.delete(id);
+    const timer = this.holdTimers.get(id);
+    if (timer) clearTimeout(timer);
+    this.holdTimers.delete(id);
   }
 
   /** Replace the team's boards. Members not heard yet get an empty card. */
@@ -945,19 +954,23 @@ export class ExcursionAppClient {
           this.commit(projectFollowers({ ...this.state, lastPacketAt: now }, followers, now));
         }
         if (event.edge === "release") {
-          // The release is not a second OK. It ends a hold: 3 s or more is an emergency.
+          // The release is not a second OK. It ends a hold: one past 3 s is an emergency,
+          // unless the alert already went off while the button was down.
           this.reportsRelease.add(event.id);
           const start = this.holds.get(event.id);
-          this.holds.delete(event.id);
+          this.clearHold(event.id);
           if (start != null && now - start >= EMERGENCY_HOLD_MS) {
             this.raiseEmergency(event.id, "hold", `Held the OK button for ${Math.round((now - start) / 1000)} s.`);
           }
           return;
         }
-        this.holds.set(event.id, now);
-        if (this.holdTimer) clearTimeout(this.holdTimer);
-        this.holdTimer = setTimeout(() => this.checkHolds(), EMERGENCY_NO_RELEASE_MS + 100);
-        (this.holdTimer as { unref?: () => void }).unref?.();
+        // A new press. While it is down, the alert goes off without waiting for the release.
+        if (!this.holds.has(event.id)) this.holds.set(event.id, now);
+        const timer = this.holdTimers.get(event.id);
+        if (timer) clearTimeout(timer);
+        const next = setTimeout(() => this.checkHolds(), EMERGENCY_NO_RELEASE_MS + 50);
+        (next as { unref?: () => void }).unref?.();
+        this.holdTimers.set(event.id, next);
         this.confirmCheckIn(event.id);
         return;
       }
@@ -1310,9 +1323,7 @@ export class ExcursionAppClient {
   private release(): void {
     if (this.ticker) clearInterval(this.ticker);
     this.ticker = null;
-    if (this.holdTimer) clearTimeout(this.holdTimer);
-    this.holdTimer = null;
-    this.holds.clear();
+    for (const id of [...this.holds.keys()]) this.clearHold(id);
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.transport = null;
