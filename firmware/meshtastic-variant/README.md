@@ -11,7 +11,8 @@ The app talks to stock Meshtastic. Meshtastic only knows the boards it has a var
 | BOOT button | 0 | Meshtastic's user button |
 | OK / emergency button | 4 | Detection Sensor. The app's Board setup sets it: hardware Excursion PCB, OK button GPIO 4 |
 | Spare button | 5 | Unused |
-| Power button | 3 | See the questions below |
+| Power button | 3 | Deep sleep and wake. See the questions below |
+| Battery sense | 10 | Battery voltage through a divider |
 
 ## Build and flash
 
@@ -52,10 +53,10 @@ The web flasher at flasher.meshtastic.org only offers boards Meshtastic ships, s
 
 Each is marked `CHECK` in `variant.h`.
 
-1. **ESP32-S3 module.** Which one, and how much flash and PSRAM (for example WROOM-1 N8, or N16R8)? `platformio.ini` assumes 8 MB flash and no PSRAM.
-2. **RF_SW.** Is it the Wio-SX1262's receive-enable pin, as on Seeed's kit? If the module only needs DIO2 for the switch, remove `SX126X_RXEN`.
-3. **Power button on GPIO3.** Does it switch power directly, or through a latch the ESP32 has to hold on? A latch needs a power-hold pin defined, and the button press then needs firmware to read it. GPIO3 is also a strapping pin, so it must not be held low at reset.
-4. **Battery sense.** Is there a divider from the battery to an ADC pin? Without one the app shows no battery level.
+1. **ESP32-S3 module.** Answered: WROOM-1-N8R8 (8 MB flash, 8 MB octal PSRAM). `platformio.ini` is set for it.
+2. **RF_SW.** Answered: the Wio-SX1262's receive enable, as on Seeed's kit.
+3. **Power button on GPIO3.** Used for deep sleep. Proposed: make it Meshtastic's button (`BUTTON_PIN 3`), so a long press sleeps and a press wakes.
+4. **Battery sense.** On GPIO10. Still needed: the two divider resistor values, for `ADC_MULTIPLIER`, and whether a pin switches the divider on.
 5. **Pull-ups.** Do the buttons on 0, 4 and 5 have external pull-ups? The OK button uses the ESP32's internal pull-up either way.
 6. **GPS baud.** The SAM-M10Q's factory rate is usually 38400. Meshtastic probes other rates if that fails.
 7. **USB.** Is the ESP32-S3's native USB (GPIO 19 and 20) wired to the connector? That is how it is flashed and how the log is read.

@@ -10,8 +10,9 @@
 // GPIO4: the OK / emergency button. Not defined here: the app's Board setup points the
 // Detection Sensor module at it (OK button GPIO 4).
 // GPIO5: spare button. Unused by this firmware.
-// GPIO3: power button. CHECK: if it drives a soft-power latch that the ESP32 must hold on,
-// that needs a power-hold pin here; see the README. GPIO3 is also an ESP32-S3 strapping pin.
+// GPIO3: power button, used with deep sleep. CHECK: likely best as BUTTON_PIN 3, so a long
+// press shuts down (deep sleep) and a press wakes, with BOOT left for flashing. GPIO3 is an
+// ESP32-S3 strapping pin, which only matters if the JTAG eFuse is set.
 
 // ---------- LoRa: Seeed Wio-SX1262 ----------
 #define USE_SX1262
@@ -54,7 +55,13 @@
 #define NEOPIXEL_STATUS_NOTIFICATION_COLOR 0x0000FF // blue; change to taste
 
 // ---------- Battery ----------
-// CHECK: no battery sense pin in the pinout. With none, the app shows no battery level, but
-// the battery report still goes out every 60 s as the heartbeat. If the PCB has a divider
-// to an ADC1 pin, define BATTERY_PIN, ADC_CHANNEL and ADC_MULTIPLIER (see heltec_v4).
-#define BATTERY_PIN -1
+// Divider from the battery to GPIO10 (ADC1 channel 9, so it works with Bluetooth on).
+#define BATTERY_PIN 10
+#define ADC_CHANNEL ADC1_GPIO10_CHANNEL
+#define BATTERY_SENSE_RESOLUTION_BITS 12
+// CHECK: (top resistor + bottom resistor) / bottom resistor. 2.0 is two equal resistors.
+#define ADC_MULTIPLIER 2.0
+// CHECK: if a pin switches the divider on, define ADC_CTRL and ADC_CTRL_ENABLED (see heltec_v4).
+
+// ---------- Not available ----------
+// GPIO 35, 36, 37: the N8R8 module's octal PSRAM. GPIO 26-32: its flash.

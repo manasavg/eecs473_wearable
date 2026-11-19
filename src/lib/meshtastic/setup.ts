@@ -304,6 +304,7 @@ const EXCURSION_PCB_PINS = new Map<number, string>([
   [7, "LoRa radio"],
   [8, "DRV2605 I2C"],
   [9, "LoRa radio"],
+  [10, "battery sense"],
   [11, "LoRa radio"],
   [12, "LoRa radio"],
   [13, "LoRa radio"],
@@ -320,6 +321,9 @@ const EXCURSION_PCB_PINS = new Map<number, string>([
   [30, "flash memory"],
   [31, "flash memory"],
   [32, "flash memory"],
+  [35, "PSRAM"],
+  [36, "PSRAM"],
+  [37, "PSRAM"],
   [38, "RGB LED"],
 ]);
 
