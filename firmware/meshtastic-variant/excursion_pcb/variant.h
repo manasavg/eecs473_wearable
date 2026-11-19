@@ -4,15 +4,19 @@
 // See ../README.md.
 
 // ---------- Buttons ----------
-// BOOT button. Meshtastic's user button (screen pages, double press sends position, and so on).
-#define BUTTON_PIN 0
-#define BUTTON_NEED_PULLUP // CHECK: remove if the PCB has its own pull-up on GPIO0.
+// Power button on GPIO3 is Meshtastic's user button. On an ESP32 board with no power latch,
+// Meshtastic's shutdown is deep sleep woken by this button: hold it to sleep, press to wake
+// (the board then restarts). GPIO3 is an RTC pin, so it can wake the chip from deep sleep.
+// GPIO3 is also an ESP32-S3 strapping pin; that only matters if the JTAG eFuse is set, and the
+// button must not be held during power-up.
+#define BUTTON_PIN 3
+// CHECK: remove if GPIO3 has an external pull-up. An external 10k pull-up to 3V3 is the
+// safer choice for deep sleep wake, since it does not depend on the chip keeping its own.
+#define BUTTON_NEED_PULLUP
+// GPIO0: BOOT button, only for flashing (hold while plugging in USB). Not used by Meshtastic.
 // GPIO4: the OK / emergency button. Not defined here: the app's Board setup points the
 // Detection Sensor module at it (OK button GPIO 4).
 // GPIO5: spare button. Unused by this firmware.
-// GPIO3: power button, used with deep sleep. CHECK: likely best as BUTTON_PIN 3, so a long
-// press shuts down (deep sleep) and a press wakes, with BOOT left for flashing. GPIO3 is an
-// ESP32-S3 strapping pin, which only matters if the JTAG eFuse is set.
 
 // ---------- LoRa: Seeed Wio-SX1262 ----------
 #define USE_SX1262
@@ -59,9 +63,9 @@
 #define BATTERY_PIN 10
 #define ADC_CHANNEL ADC1_GPIO10_CHANNEL
 #define BATTERY_SENSE_RESOLUTION_BITS 12
-// CHECK: (top resistor + bottom resistor) / bottom resistor. 2.0 is two equal resistors.
+// Schematic: VBAT - R10 100k - GPIO10 - R11 100k - GND. (100k + 100k) / 100k = 2.0.
+// No enable pin: the divider is always on and draws about 20 uA from the battery.
 #define ADC_MULTIPLIER 2.0
-// CHECK: if a pin switches the divider on, define ADC_CTRL and ADC_CTRL_ENABLED (see heltec_v4).
 
 // ---------- Not available ----------
 // GPIO 35, 36, 37: the N8R8 module's octal PSRAM. GPIO 26-32: its flash.
