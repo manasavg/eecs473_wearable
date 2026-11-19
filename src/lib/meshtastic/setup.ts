@@ -26,6 +26,7 @@ export function currentBoardConfig(raw: {
   detection?: LibraryProtobuf.ModuleConfig.ModuleConfig_DetectionSensorConfig;
   lora?: LibraryProtobuf.Config.Config_LoRaConfig;
   telemetry?: LibraryProtobuf.ModuleConfig.ModuleConfig_TelemetryConfig;
+  notification?: LibraryProtobuf.ModuleConfig.ModuleConfig_ExternalNotificationConfig;
 }): CurrentBoardConfig {
   return {
     channel: toCurrent(LibraryProtobuf.Channel.ChannelSchema, Protobuf.Channel.ChannelSchema, raw.channel),
@@ -40,6 +41,11 @@ export function currentBoardConfig(raw: {
       raw.detection,
     ),
     lora: toCurrent(LibraryProtobuf.Config.Config_LoRaConfigSchema, Protobuf.Config.Config_LoRaConfigSchema, raw.lora),
+    notification: toCurrent(
+      LibraryProtobuf.ModuleConfig.ModuleConfig_ExternalNotificationConfigSchema,
+      Protobuf.ModuleConfig.ModuleConfig_ExternalNotificationConfigSchema,
+      raw.notification,
+    ),
     telemetry: toCurrent(
       LibraryProtobuf.ModuleConfig.ModuleConfig_TelemetryConfigSchema,
       Protobuf.ModuleConfig.ModuleConfig_TelemetryConfigSchema,
@@ -88,6 +94,14 @@ export function presetName(code: number | null): string {
   return Protobuf.Config.Config_LoRaConfig_ModemPreset[code] ?? String(code);
 }
 
+/** Which board design is being set up. It decides which pins are already taken. */
+export type HardwareProfile = "excursion-pcb" | "heltec-v4";
+
+export const HARDWARE_PROFILES: Array<{ id: HardwareProfile; name: string; okButtonPin: number | null }> = [
+  { id: "excursion-pcb", name: "Excursion PCB", okButtonPin: 4 },
+  { id: "heltec-v4", name: "Heltec V4", okButtonPin: null },
+];
+
 /** What "Set up this board" writes. The same plan goes on every board in the team. */
 export interface BoardPlan {
   channelName: string;
@@ -101,6 +115,10 @@ export interface BoardPlan {
   region: number;
   /** How often the board reports its battery over the radio. Optional for older saved plans. */
   heartbeatSecs?: number;
+  /** Board design, for the pin check. Older saved plans are Heltec V4. */
+  hardware?: HardwareProfile;
+  /** Vibrate and light up when a message such as CHECK IN arrives. Defaults to on. */
+  notifyOnMessage?: boolean;
 }
 
 /** The settings that matter here, as the connected board reports them. */
@@ -121,6 +139,8 @@ export interface BoardSettings {
   txEnabled: boolean | null;
   /** Battery report interval, or 0 when the board does not send it over the radio. Null until read. */
   heartbeatSecs: number | null;
+  /** Whether a message vibrates and lights the board. Null until read. */
+  notifyOnMessage: boolean | null;
 }
 
 /** The board's own settings, read during configure. A write replaces a whole group, so these are the base. */
@@ -130,6 +150,7 @@ export interface CurrentBoardConfig {
   detection?: Protobuf.ModuleConfig.ModuleConfig_DetectionSensorConfig;
   lora?: Protobuf.Config.Config_LoRaConfig;
   telemetry?: Protobuf.ModuleConfig.ModuleConfig_TelemetryConfig;
+  notification?: Protobuf.ModuleConfig.ModuleConfig_ExternalNotificationConfig;
 }
 
 export interface BoardWrites {
@@ -137,6 +158,8 @@ export interface BoardWrites {
   position: Protobuf.Config.Config;
   lora: Protobuf.Config.Config;
   telemetry: Protobuf.ModuleConfig.ModuleConfig;
+  /** Vibration and light on a message. Null when the plan leaves it alone. */
+  notification: Protobuf.ModuleConfig.ModuleConfig | null;
   detection: Protobuf.ModuleConfig.ModuleConfig | null;
 }
 
@@ -201,6 +224,22 @@ export function buildBoardWrites(current: CurrentBoardConfig, plan: BoardPlan): 
     payloadVariant: { case: "telemetry", value: telemetryConfig },
   });
 
+  // A CHECK IN vibrates the DRV2605 and lights the RGB LED, so the wearer knows to press OK.
+  // Other output pins the board already uses, such as a Heltec LED on GPIO 40, are kept.
+  let notification: Protobuf.ModuleConfig.ModuleConfig | null = null;
+  if (plan.notifyOnMessage ?? true) {
+    const alerts = current.notification
+      ? clone(Protobuf.ModuleConfig.ModuleConfig_ExternalNotificationConfigSchema, current.notification)
+      : create(Protobuf.ModuleConfig.ModuleConfig_ExternalNotificationConfigSchema);
+    alerts.enabled = true;
+    alerts.alertMessage = true;
+    alerts.alertMessageVibra = true;
+    if (!alerts.outputMs) alerts.outputMs = 1000;
+    notification = create(Protobuf.ModuleConfig.ModuleConfigSchema, {
+      payloadVariant: { case: "externalNotification", value: alerts },
+    });
+  }
+
   let detection: Protobuf.ModuleConfig.ModuleConfig | null = null;
   if (plan.okButtonPin != null) {
     const sensor = current.detection
@@ -224,7 +263,7 @@ export function buildBoardWrites(current: CurrentBoardConfig, plan: BoardPlan): 
     });
   }
 
-  return { channel, position, lora, telemetry, detection };
+  return { channel, position, lora, telemetry, notification, detection };
 }
 
 /** A message for the first problem with a plan, or null when it is usable. */
@@ -242,8 +281,11 @@ export function checkPlan(plan: BoardPlan): string | null {
   if (plan.okButtonPin != null && (!Number.isInteger(plan.okButtonPin) || plan.okButtonPin < 0 || plan.okButtonPin > 48)) {
     return "The OK button pin must be a GPIO number from 0 to 48.";
   }
-  if (plan.okButtonPin != null && RESERVED_PINS.has(plan.okButtonPin)) {
-    return `GPIO ${plan.okButtonPin} is already used on the Heltec V4 (${RESERVED_PINS.get(plan.okButtonPin)}). Pick another pin.`;
+  const hardware = plan.hardware ?? "heltec-v4";
+  const reserved = hardware === "excursion-pcb" ? EXCURSION_PCB_PINS : RESERVED_PINS;
+  if (plan.okButtonPin != null && reserved.has(plan.okButtonPin)) {
+    const board = HARDWARE_PROFILES.find((item) => item.id === hardware)?.name ?? hardware;
+    return `GPIO ${plan.okButtonPin} is already used on the ${board} (${reserved.get(plan.okButtonPin)}). Pick another pin.`;
   }
   return null;
 }
@@ -252,6 +294,35 @@ export function checkPlan(plan: BoardPlan): string | null {
  * Pins the Heltec V3/V4 or the ESP32-S3 already use. Not a complete pinout: check the V4 pinout before wiring.
  * Likely free on the header: 2, 4, 5, 6, 7, 40, 41, 42, 47, 48.
  */
+/** Pins the Excursion PCB already uses, from its pinout. GPIO4 is the OK button; GPIO5 is spare. */
+const EXCURSION_PCB_PINS = new Map<number, string>([
+  [0, "BOOT button"],
+  [1, "DRV2605 I2C"],
+  [2, "DRV2605 enable"],
+  [3, "power button"],
+  [6, "LoRa RF switch"],
+  [7, "LoRa radio"],
+  [8, "DRV2605 I2C"],
+  [9, "LoRa radio"],
+  [11, "LoRa radio"],
+  [12, "LoRa radio"],
+  [13, "LoRa radio"],
+  [14, "LoRa radio"],
+  [15, "LoRa radio"],
+  [17, "GPS"],
+  [18, "GPS"],
+  [19, "USB"],
+  [20, "USB"],
+  [26, "flash memory"],
+  [27, "flash memory"],
+  [28, "flash memory"],
+  [29, "flash memory"],
+  [30, "flash memory"],
+  [31, "flash memory"],
+  [32, "flash memory"],
+  [38, "RGB LED"],
+]);
+
 const RESERVED_PINS = new Map<number, string>([
   [0, "PRG button"],
   [1, "battery sense"],
@@ -307,6 +378,9 @@ export function summarize(current: CurrentBoardConfig): BoardSettings {
         ? current.telemetry.deviceUpdateInterval
         : 0
       : null,
+    notifyOnMessage: current.notification
+      ? current.notification.enabled && current.notification.alertMessage
+      : null,
   };
 }
 
@@ -322,6 +396,9 @@ export function differences(board: BoardSettings, plan: BoardPlan): string[] {
     out.push(board.modemPreset == null ? "Uses custom radio settings" : `Preset is ${presetName(board.modemPreset)}`);
   }
   if (board.txEnabled === false) out.push("Transmit is turned off");
+  if ((plan.notifyOnMessage ?? true) && board.notifyOnMessage === false) {
+    out.push("Does not vibrate or light up when a check-in arrives");
+  }
   const heartbeat = Math.round(plan.heartbeatSecs ?? DEFAULT_HEARTBEAT_SECS);
   if (board.heartbeatSecs != null && board.heartbeatSecs !== heartbeat) {
     out.push(

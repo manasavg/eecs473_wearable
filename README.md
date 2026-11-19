@@ -6,9 +6,13 @@ Every Heltec runs Meshtastic firmware, flashed from https://flasher.meshtastic.o
 
 Before testing, connect to each board in turn and use **Board setup** in the app. It puts every board on the same private channel, sets position reports every 30 s, and turns on the OK button. See the board settings in `PROTOCOL.md`.
 
-The phone uses Meshtastic's own client. The Heltec V4 firmware already runs the SX1262 LoRa radio and the GPS port: GPIO 38 toward the GPS module, GPIO 39 toward the board, 9600 baud. Wire the NEO-6M there, with VCC to 5V and GND to GND. The antennas need a view of the sky.
+The phone uses Meshtastic's own client. The Heltec V4 firmware already runs the SX1262 LoRa radio and the GPS port: GPIO 38 carries data from the GPS to the board (the GPS TX), GPIO 39 from the board to the GPS (the GPS RX), 9600 baud. Wire the NEO-6M there, with VCC to 5V and GND to GND. The antennas need a view of the sky.
 
 Check-in uses Meshtastic text. A board shows Received when its own radio acknowledges the message, and OK once someone presses the OK button wired to it. See the OK button section in `PROTOCOL.md`. The red LED on a far board is not part of stock Meshtastic.
+
+## Excursion PCB
+
+The custom PCB (ESP32-S3, Wio-SX1262, SAM-M10Q, DRV2605, SK6812MINI) runs Meshtastic built with its own board definition, in `firmware/meshtastic-variant/`. That folder's README has the pin map, the build and flash steps, and the questions to settle from the schematic. In the app, set Hardware to Excursion PCB in Board setup; the OK button is GPIO 4.
 
 ## Run
 

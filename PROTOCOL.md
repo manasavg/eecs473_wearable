@@ -84,7 +84,7 @@ The phone saves these locations, so they survive a reconnect or an app restart. 
 
 ## GPS
 
-The Meshtastic firmware reads the GPS. Wire the NEO-6M to the Heltec V4 GPS port: GPIO 38 toward the GPS module, GPIO 39 toward the board, 9600 baud, VCC to 5V, GND to GND. The antennas need a view of the sky.
+The Meshtastic firmware reads the GPS. Wire the NEO-6M to the Heltec V4 GPS port: GPIO 38 carries data from the GPS to the board (the GPS TX), GPIO 39 from the board to the GPS (the GPS RX), 9600 baud, VCC to 5V, GND to GND. The antennas need a view of the sky.
 
 Positions arrive as `Position` packets and in the node database. `latitude_i` and `longitude_i` are degrees × 10⁷. A missing value, `0, 0`, or a value outside ±90 / ±180 counts as No fix.
 

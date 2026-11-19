@@ -103,6 +103,23 @@ describe("buildBoardWrites", () => {
     assert.equal(sensor.minimumBroadcastSecs, 1);
   });
 
+  it("makes a message vibrate and light the board, keeping its own output pin", () => {
+    const current = {
+      position: boardPosition(),
+      lora: boardLora(),
+      notification: create(ModuleConfig.ModuleConfig_ExternalNotificationConfigSchema, { output: 40, outputMs: 500 }),
+    };
+    const writes = buildBoardWrites(current, plan());
+    if (writes.notification?.payloadVariant.case !== "externalNotification") assert.fail("no notification");
+    const alerts = writes.notification.payloadVariant.value;
+    assert.equal(alerts.enabled, true);
+    assert.equal(alerts.alertMessage, true);
+    assert.equal(alerts.alertMessageVibra, true);
+    assert.equal(alerts.output, 40);
+    assert.equal(alerts.outputMs, 500);
+    assert.equal(buildBoardWrites(current, plan({ notifyOnMessage: false })).notification, null);
+  });
+
   it("leaves the OK button alone when no pin is given", () => {
     assert.equal(buildBoardWrites({ position: boardPosition(), lora: boardLora() }, plan({ okButtonPin: null })).detection, null);
   });
@@ -132,6 +149,11 @@ describe("checkPlan", () => {
     assert.match(checkPlan(plan({ okButtonPin: 38 })) ?? "", /GPS/);
     assert.match(checkPlan(plan({ okButtonPin: 0 })) ?? "", /PRG/);
     assert.match(checkPlan(plan({ okButtonPin: 9 })) ?? "", /LoRa/);
+    // The Excursion PCB has its own pin map.
+    assert.equal(checkPlan(plan({ hardware: "excursion-pcb", okButtonPin: 4 })), null);
+    assert.equal(checkPlan(plan({ hardware: "excursion-pcb", okButtonPin: 5 })), null);
+    assert.match(checkPlan(plan({ hardware: "excursion-pcb", okButtonPin: 6 })) ?? "", /Excursion PCB.*RF switch/);
+    assert.match(checkPlan(plan({ hardware: "excursion-pcb", okButtonPin: 38 })) ?? "", /RGB LED/);
     assert.equal(checkPlan(plan({ okButtonPin: 47 })), null);
     assert.equal(checkPlan(plan()), null);
   });
@@ -181,7 +203,9 @@ describe("differences", () => {
     if (writes.detection?.payloadVariant.case !== "detectionSensor") assert.fail("no detection");
     if (writes.lora.payloadVariant.case !== "lora") assert.fail("no lora");
     if (writes.telemetry.payloadVariant.case !== "telemetry") assert.fail("no telemetry");
+    if (writes.notification?.payloadVariant.case !== "externalNotification") assert.fail("no notification");
     const done = summarize({
+      notification: writes.notification.payloadVariant.value,
       telemetry: writes.telemetry.payloadVariant.value,
       position: writes.position.payloadVariant.value,
       lora: writes.lora.payloadVariant.value,
@@ -264,6 +288,7 @@ describe("MeshLink.setUpBoard", () => {
       "setConfig",
       "setConfig",
       "setChannel",
+      "setModuleConfig",
       "setModuleConfig",
       "setModuleConfig",
       "commitEditSettings",

@@ -89,6 +89,7 @@ export interface SavedTeam {
   okButtonPin: number | null;
   /** LoRa region code. 1 is US. */
   region: number;
+  hardware: "excursion-pcb" | "heltec-v4";
 }
 
 export function loadTeam(): SavedTeam | null {
@@ -104,6 +105,7 @@ export function loadTeam(): SavedTeam | null {
       positionSecs: typeof parsed.positionSecs === "number" ? parsed.positionSecs : 30,
       okButtonPin: typeof parsed.okButtonPin === "number" ? parsed.okButtonPin : null,
       region: typeof parsed.region === "number" && parsed.region > 0 ? parsed.region : 1,
+      hardware: parsed.hardware === "excursion-pcb" ? "excursion-pcb" : "heltec-v4",
     };
   } catch {
     return null;

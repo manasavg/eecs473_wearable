@@ -113,6 +113,9 @@ export class MeshLink {
     this.device.events.onModuleConfigPacket.subscribe((config: Protobuf.ModuleConfig.ModuleConfig) => {
       if (config.payloadVariant.case === "detectionSensor") this.boardConfig.detection = config.payloadVariant.value;
       else if (config.payloadVariant.case === "telemetry") this.boardConfig.telemetry = config.payloadVariant.value;
+      else if (config.payloadVariant.case === "externalNotification") {
+        this.boardConfig.notification = config.payloadVariant.value;
+      }
       else return;
       this.emitBoardSettings();
     });
@@ -142,10 +145,12 @@ export class MeshLink {
         const metrics = packet.data.variant.value;
         const from = packet.from >>> 0;
         if (from !== this.myNode && (from < FIRST_NODE || this.rejected.has(from))) return;
+        // A board with no battery sense pin reports 0 % at 0 V. That is unknown, not empty.
+        const unknown = !metrics.batteryLevel && !metrics.voltage;
         this.emit({
           type: "battery",
           id: from,
-          percent: metrics.batteryLevel ?? null,
+          percent: unknown ? null : (metrics.batteryLevel ?? null),
           voltage: metrics.voltage ?? null,
         });
       },
@@ -224,6 +229,12 @@ export class MeshLink {
     await setupStep("radio region and preset", this.sendAdmin({ case: "setConfig", value: writes.lora }));
     await setupStep("team channel", this.sendAdmin({ case: "setChannel", value: writes.channel }));
     await setupStep("battery report heartbeat", this.sendAdmin({ case: "setModuleConfig", value: writes.telemetry }));
+    if (writes.notification) {
+      await setupStep(
+        "check-in vibration and light",
+        this.sendAdmin({ case: "setModuleConfig", value: writes.notification }),
+      );
+    }
     if (writes.detection) {
       await setupStep("OK button", this.sendAdmin({ case: "setModuleConfig", value: writes.detection }));
     }

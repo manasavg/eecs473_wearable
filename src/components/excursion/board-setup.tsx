@@ -9,6 +9,8 @@ import {
   DEFAULT_HEARTBEAT_SECS,
   DEFAULT_POSITION_SECS,
   DEFAULT_REGION,
+  HARDWARE_PROFILES,
+  type HardwareProfile,
   POSITION_SECS_MAX,
   POSITION_SECS_MIN,
   REGIONS,
@@ -68,6 +70,7 @@ export function BoardSetup({
   const [positionText, setPositionText] = useState(String(DEFAULT_POSITION_SECS));
   const [pinText, setPinText] = useState("");
   const [region, setRegion] = useState<number>(DEFAULT_REGION);
+  const [hardware, setHardware] = useState<HardwareProfile>("excursion-pcb");
   const [hasSavedTeam, setHasSavedTeam] = useState(false);
   const [fromLeader, setFromLeader] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -80,6 +83,7 @@ export function BoardSetup({
       setPositionText(String(team.positionSecs));
       setPinText(team.okButtonPin == null ? "" : String(team.okButtonPin));
       setRegion(team.region);
+      setHardware(team.hardware);
       setHasSavedTeam(true);
     } else {
       setKeyText(bytesToBase64(generateKey()));
@@ -109,6 +113,8 @@ export function BoardSetup({
         okButtonPin: pinText.trim() === "" ? null : Number.parseInt(pinText, 10),
         region,
         heartbeatSecs: DEFAULT_HEARTBEAT_SECS,
+        hardware,
+        notifyOnMessage: true,
       }
     : null;
   const problem = plan ? checkPlan(plan) : "The team key is not valid. Paste the team key or generate a new one.";
@@ -124,6 +130,7 @@ export function BoardSetup({
       positionSecs: current.positionSecs,
       okButtonPin: current.okButtonPin,
       region: current.region,
+      hardware: current.hardware ?? hardware,
     });
     setHasSavedTeam(true);
   };
@@ -203,6 +210,25 @@ export function BoardSetup({
       <p className="text-sm text-neutral-600">Anyone with this key can join the channel.</p>
 
       <label className="flex items-center gap-2">
+        <span className="w-36 text-sm text-neutral-600">Hardware</span>
+        <select
+          value={hardware}
+          className="h-11 border border-neutral-300 bg-white px-2"
+          onChange={(event) => {
+            const next = event.target.value as HardwareProfile;
+            setHardware(next);
+            const pin = HARDWARE_PROFILES.find((item) => item.id === next)?.okButtonPin;
+            if (pin != null && pinText.trim() === "") setPinText(String(pin));
+          }}
+        >
+          {HARDWARE_PROFILES.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex items-center gap-2">
         <span className="w-36 text-sm text-neutral-600">Region</span>
         <select
           value={region}
@@ -245,7 +271,9 @@ export function BoardSetup({
       <p className="text-sm text-neutral-600">
         Use US in the United States. Setup also sets the {presetName(TEAM_PRESET)} preset, a battery report every{" "}
         {DEFAULT_HEARTBEAT_SECS} s so a board without a GPS fix is still heard, and a GPS read every{" "}
-        {DEFAULT_GPS_UPDATE_SECS} s. Leave the GPIO blank for a board with no OK button.
+        {DEFAULT_GPS_UPDATE_SECS} s. A CHECK IN makes the board vibrate and light up. Leave the GPIO blank for a
+        board with no OK button. On the Excursion PCB the OK button is GPIO 4. Pick the hardware before setting up
+        each board.
       </p>
       {problem && <p className="text-sm text-red-700">{problem}</p>}
 

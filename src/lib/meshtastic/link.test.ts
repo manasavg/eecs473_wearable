@@ -305,4 +305,41 @@ describe("MeshLink", () => {
     assert.equal(isEmergencyText("help me"), true);
     assert.equal(isEmergencyText("no help needed"), false);
   });
+
+  it("reports no battery level for a board without battery sensing", async () => {
+    const { Telemetry } = await import("@meshtastic/protobufs");
+    const { link, events } = await listen();
+    link.push(fromRadio({ case: "myInfo", value: create(Mesh.MyNodeInfoSchema, { myNodeNum: 0x11 }) }));
+    const report = (batteryLevel: number, voltage: number) =>
+      fromRadio({
+        case: "packet",
+        value: create(Mesh.MeshPacketSchema, {
+          from: 0xa3,
+          to: 0xffffffff,
+          id: 77,
+          payloadVariant: {
+            case: "decoded",
+            value: create(Mesh.DataSchema, {
+              portnum: Portnums.PortNum.TELEMETRY_APP,
+              payload: toBinary(
+                Telemetry.TelemetrySchema,
+                create(Telemetry.TelemetrySchema, {
+                  variant: {
+                    case: "deviceMetrics",
+                    value: create(Telemetry.DeviceMetricsSchema, { batteryLevel, voltage }),
+                  },
+                }),
+              ),
+            }),
+          },
+        }),
+      });
+    link.push(report(0, 0));
+    link.push(report(87, 4.0));
+    await settle();
+    const batteries = events.filter((event) => event.type === "battery");
+    assert.equal(batteries.length, 2);
+    assert.equal(batteries[0].type === "battery" && batteries[0].percent, null);
+    assert.equal(batteries[1].type === "battery" && batteries[1].percent, 87);
+  });
 });
