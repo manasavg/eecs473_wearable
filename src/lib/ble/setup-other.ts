@@ -15,14 +15,16 @@ export async function setUpOtherBoard(
   peer: BlePeer | null,
   plan: BoardPlan,
   onProgress: (message: string) => void,
-): Promise<"confirmed" | "restarting"> {
+): Promise<{ result: "confirmed" | "restarting"; nodeId: number | null }> {
   const transport = createTransport("beacon");
   if (transport instanceof NativeBleTransport) transport.remembers = false;
   if (!transport.setUpBoard) throw new Error("This phone cannot change board settings.");
 
   let settings: BoardSettings | null = null;
+  let nodeId: number | null = null;
   const unsubscribe = transport.subscribe((event) => {
     if (event.type === "board-settings") settings = event.settings;
+    if (event.type === "my-node") nodeId = event.id;
   });
   try {
     onProgress("Connecting…");
@@ -36,7 +38,8 @@ export async function setUpOtherBoard(
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     onProgress("Writing the team settings…");
-    return await transport.setUpBoard(plan);
+    const result = await transport.setUpBoard(plan);
+    return { result, nodeId };
   } finally {
     unsubscribe();
     await transport.disconnect().catch(() => undefined);

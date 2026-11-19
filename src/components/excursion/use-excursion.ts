@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ExcursionAppClient, type AppState, type GroupMember } from "@/lib/ble/app-client";
+import {
+  ExcursionAppClient,
+  nodeSuffix,
+  peerSuffix,
+  type AppState,
+  type GroupMember,
+} from "@/lib/ble/app-client";
 import { isNativeShell } from "@/lib/ble/create-transport";
 import { rememberedNativeBeaconName } from "@/lib/ble/native-transport";
 import type { BlePeer } from "@/lib/ble/transport";
@@ -166,10 +172,50 @@ export function useExcursion() {
   const setGroup = useCallback(
     (group: GroupMember[]) => {
       client.setGroup(group);
-      saveGroup(client.getState().group);
     },
     [client],
   );
+
+  // The client also corrects the group itself when it learns a board's real node number,
+  // so save it whenever it changes rather than only when edited here.
+  const savedGroup = useRef<string | null>(null);
+  useEffect(() => {
+    const snapshot = JSON.stringify(state.group);
+    if (savedGroup.current === null) {
+      savedGroup.current = snapshot;
+      return;
+    }
+    if (snapshot === savedGroup.current) return;
+    savedGroup.current = snapshot;
+    saveGroup(state.group);
+  }, [state.group]);
+
+  /** A board's Bluetooth digits turned out to differ from its node number's: move its name too. */
+  const moveName = useCallback((from: string, to: string) => {
+    if (from === to) return;
+    setNames((current) => {
+      if (!current[from] || current[to]) return current;
+      const next = { ...current, [to]: current[from] };
+      delete next[from];
+      saveNames(next);
+      return next;
+    });
+  }, []);
+
+  const learn = useCallback(
+    (bleSuffix: string, nodeId: number) => {
+      client.learnBoard(bleSuffix, nodeId);
+      moveName(bleSuffix, nodeSuffix(nodeId));
+    },
+    [client, moveName],
+  );
+
+  // The leader's real node number arrives after connecting; its name follows the same rule.
+  const leaderBleSuffix = state.leaderBleSuffix;
+  const leaderId = state.leaderId;
+  useEffect(() => {
+    if (leaderBleSuffix && leaderId != null) moveName(leaderBleSuffix, nodeSuffix(leaderId));
+  }, [leaderBleSuffix, leaderId, moveName]);
 
   const renameBoard = useCallback((suffix: string, name: string) => {
     setNames((current) => {
@@ -187,7 +233,10 @@ export function useExcursion() {
     const report = (status: "working" | "done" | "error", message: string) =>
       setOtherSetup((current) => ({ ...current, [key]: { status, message } }));
     try {
-      const result = await setUpOtherBoard(peer, plan, (message) => report("working", message));
+      const { result, nodeId } = await setUpOtherBoard(peer, plan, (message) => report("working", message));
+      // Its real node number is known now. Match the group entry and its name by it.
+      const bleSuffix = peer ? peerSuffix(peer.name) : null;
+      if (bleSuffix && nodeId != null) learn(bleSuffix, nodeId);
       report(
         "done",
         result === "confirmed"
@@ -197,7 +246,7 @@ export function useExcursion() {
     } catch (error) {
       report("error", error instanceof Error ? error.message : String(error));
     }
-  }, []);
+  }, [learn]);
 
   return {
     state,

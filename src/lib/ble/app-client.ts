@@ -220,6 +220,8 @@ export interface AppState {
   board: BoardSettings | null;
   /** Node number of the connected board. It is never listed as a follower. */
   leaderId: number | null;
+  /** The 4 hex digits in the connected board's Bluetooth name, which may not match its node number. */
+  leaderBleSuffix: string | null;
   /** The team's boards. Empty means show every board heard. */
   group: GroupMember[];
   /** Open emergencies, newest first. Kept across reconnects until acknowledged. */
@@ -274,6 +276,7 @@ export function createInitialState(
     requireConfirm,
     board: null,
     leaderId: null,
+    leaderBleSuffix: null,
     group: [],
     emergencies: [],
     boardSetup: { status: "idle", message: null },
@@ -324,8 +327,13 @@ function projectFollowers(state: AppState, followers: TrackedFollower[], now: nu
 function withRoster(followers: TrackedFollower[], state: AppState): TrackedFollower[] {
   const real = followers.filter((item) => !item.placeholder && item.id !== state.leaderId);
   const leaderSuffix = state.leaderId == null ? null : nodeSuffix(state.leaderId);
+  // The leader is the board tapped in the list. Match it by its Bluetooth name too, in case
+  // that name does not end in the same 4 digits as its node number.
   const missing = state.group.filter(
-    (member) => member.suffix !== leaderSuffix && !real.some((item) => nodeSuffix(item.id) === member.suffix),
+    (member) =>
+      member.suffix !== leaderSuffix &&
+      member.suffix !== state.leaderBleSuffix &&
+      !real.some((item) => nodeSuffix(item.id) === member.suffix),
   );
   const kept = followers.filter(
     (item) => item.placeholder && missing.some((member) => placeholderId(member.suffix) === item.id),
@@ -335,6 +343,20 @@ function withRoster(followers: TrackedFollower[], state: AppState): TrackedFollo
     .map((member) => emptyFollower(member));
   if (kept.length + added.length === 0 && real.length === followers.length) return followers;
   return [...real, ...kept, ...added].sort((a, b) => a.id - b.id);
+}
+
+/**
+ * Move a group entry from the digits in a board's Bluetooth name to the digits of its real
+ * node number, when the two differ. Returns the same array when nothing changes.
+ */
+export function learnSuffix(group: GroupMember[], bleSuffix: string, nodeId: number): GroupMember[] {
+  const real = nodeSuffix(nodeId);
+  if (real === bleSuffix || !group.some((member) => member.suffix === bleSuffix)) return group;
+  const moved = group.find((member) => member.suffix === bleSuffix)!;
+  return [
+    ...group.filter((member) => member.suffix !== bleSuffix && member.suffix !== real),
+    { ...moved, suffix: real },
+  ];
 }
 
 /** Stand-in id for a member not heard yet. Real node numbers are far larger than 0xffff. */
@@ -575,6 +597,17 @@ export class ExcursionAppClient {
     const timer = this.holdTimers.get(id);
     if (timer) clearTimeout(timer);
     this.holdTimers.delete(id);
+  }
+
+  /**
+   * A board's real node number is now known, for example after setting it up over Bluetooth.
+   * A group entry saved under its Bluetooth digits is moved to the node number's digits.
+   */
+  learnBoard(bleSuffix: string, nodeId: number): void {
+    const group = learnSuffix(this.state.group, bleSuffix, nodeId);
+    if (group === this.state.group) return;
+    const next = { ...this.state, group };
+    this.commit(projectFollowers(next, this.state.followers, this.now()));
   }
 
   /** Replace the team's boards. Members not heard yet get an empty card. */
@@ -882,6 +915,7 @@ export class ExcursionAppClient {
               connection: "connected",
               error: null,
               deviceName: event.deviceName,
+              leaderBleSuffix: peerSuffix(event.deviceName),
               connectedAt: this.state.connectedAt ?? this.now(),
             },
             updateLastKnown(withRoster(this.state.followers, this.state), this.remembered, this.now()),
@@ -978,7 +1012,10 @@ export class ExcursionAppClient {
         this.raiseEmergency(event.id, "message", event.text);
         return;
       case "my-node": {
-        const next = { ...this.state, leaderId: event.id };
+        const group = this.state.leaderBleSuffix
+          ? learnSuffix(this.state.group, this.state.leaderBleSuffix, event.id)
+          : this.state.group;
+        const next = { ...this.state, leaderId: event.id, group };
         this.commit(projectFollowers(next, this.state.followers, this.now()));
         return;
       }

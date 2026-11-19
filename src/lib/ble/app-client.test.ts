@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ExcursionAppClient } from "./app-client.ts";
+import { ExcursionAppClient, isInGroup } from "./app-client.ts";
 import type { BleEvent, BleTransport } from "./transport.ts";
 import { BROADCAST_ID } from "./constants.ts";
 import { CmdType, Status, type AppCommand, type FollowerInfo } from "./types.ts";
@@ -799,6 +799,51 @@ describe("ExcursionAppClient", () => {
       client.setGroup([{ suffix: "19e8", name: "Ours" }]);
       transport.emit({ type: "emergency", id: 0x7777, text: "SOS" });
       assert.equal(client.getState().emergencies.length, 0);
+      await client.disconnect();
+    });
+  });
+
+  describe("Bluetooth name digits that differ from the node number", () => {
+    it("never shows the connected board's own card, and moves its group entry to the real digits", async () => {
+      const transport = new ScriptedTransport();
+      // The board advertises as Meshtastic_1a2b, but its node number ends in c3d4.
+      transport.connect = async function () {
+        this.emit({ type: "connected", deviceName: "Meshtastic_1a2b" });
+      };
+      const client = new ExcursionAppClient();
+      client.setGroup([
+        { suffix: "1a2b", name: "Meshtastic_1a2b" },
+        { suffix: "5e6f", name: "Meshtastic_5e6f" },
+      ]);
+      await client.connectDevice("beacon", transport);
+      assert.deepEqual(
+        client.getState().followers.map((item) => item.name),
+        ["Meshtastic_5e6f"],
+      );
+      transport.emit({ type: "my-node", id: 0x9900c3d4 });
+      assert.deepEqual(
+        client.getState().group.map((member) => member.suffix).sort(),
+        ["5e6f", "c3d4"],
+      );
+      assert.deepEqual(
+        client.getState().followers.map((item) => item.name),
+        ["Meshtastic_5e6f"],
+      );
+      await client.disconnect();
+    });
+
+    it("learns a follower's real digits so its heard card replaces the stand-in", async () => {
+      const transport = new ScriptedTransport();
+      const client = new ExcursionAppClient();
+      client.setGroup([{ suffix: "5e6f", name: "Follower" }]);
+      await client.connectDevice("beacon", transport);
+      followerAt(transport, 0x77001234, 42.28, Date.now());
+      // Heard, but under different digits: still a stand-in in the group.
+      assert.equal(client.getState().followers.find((item) => item.name === "Follower")?.placeholder, true);
+      client.learnBoard("5e6f", 0x77001234);
+      const cards = client.getState().followers.filter((item) => isInGroup(client.getState(), item.id));
+      assert.deepEqual(cards.map((item) => item.id), [0x77001234]);
+      assert.equal(cards[0]?.placeholder, false);
       await client.disconnect();
     });
   });
