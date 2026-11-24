@@ -1,13 +1,10 @@
 import { Capacitor } from "@capacitor/core";
-import { eventsFromNotify } from "./live-link";
-import { encodeCommand, viewToBytes } from "./protocol";
-import type { BleEvent, BleTransport } from "./transport";
-import type { AppCommand } from "./types";
+import { MeshLink } from "../meshtastic/link";
+import { viewToBytes } from "./bytes";
+import type { BleEvent, BlePeer, BleTransport } from "./transport";
 import {
-  ALERT_UUID,
-  FOLLOWER_STATUS_UUID,
-  LEADER_STATUS_UUID,
   BLE_NAME_PREFIX,
+  FROM_RADIO_UUID,
   LIVE_RX_UUID,
   LIVE_SERVICE_UUID,
   LIVE_TX_UUID,
@@ -30,6 +27,13 @@ import {
 const RECONNECT_ATTEMPTS = 3;
 const DEVICE_ID_KEY = "excursion.nativeDeviceId";
 const DEVICE_NAME_KEY = "excursion.nativeDeviceName";
+
+/**
+ * initialize() builds a new iOS Bluetooth controller. Calling it again after a
+ * scan drops the boards that scan found, and connect then waits until timeout.
+ * One controller per central for the life of the page.
+ */
+const preparedCentrals = new WeakSet<object>();
 
 const DISPLAY = {
   scanning: `Looking for ${BLE_NAME_PREFIX}…`,
@@ -61,6 +65,12 @@ interface NativeDevice {
   name?: string;
 }
 
+interface NativeScanResult {
+  device: NativeDevice;
+  localName?: string;
+  uuids?: string[];
+}
+
 /**
  * The slice of @capacitor-community/bluetooth-le this app uses.
  * Tests pass a fake. The phone build uses BleClient.
@@ -75,6 +85,18 @@ export interface NativeCentral {
     namePrefix?: string;
     displayMode?: "alert" | "list";
   }): Promise<NativeDevice>;
+  /** Boards this phone is already connected to. They stop advertising, so a scan misses them. */
+  getConnectedDevices?(services: string[]): Promise<NativeDevice[]>;
+  requestLEScan?(
+    options: {
+      services?: string[];
+      namePrefix?: string;
+      optionalServices?: string[];
+      allowDuplicates?: boolean;
+    },
+    callback: (result: NativeScanResult) => void,
+  ): Promise<void>;
+  stopLEScan?(): Promise<void>;
   getDevices(deviceIds: string[]): Promise<NativeDevice[]>;
   connect(
     deviceId: string,
@@ -109,15 +131,25 @@ export function rememberedNativeBeaconName(): string | null {
 }
 
 export class NativeBleTransport implements BleTransport {
+  /**
+   * Save this board as the one to reconnect to. Off for the short connection that sets up a
+   * follower, so the leader stays the remembered board.
+   */
+  remembers = true;
   private listeners = new Set<(event: BleEvent) => void>();
   private central: NativeCentral | null = null;
   private deviceId: string | null = null;
   private deviceName = BLE_NAME_PREFIX;
+  /** Open check-ins, kept across reconnects. See MeshLink. */
+  private readonly pendingCheckIns = new Map<number, number>();
   private writeTarget: { uuid: string; withoutResponse: boolean } | null = null;
   private wantLink = false;
   private reconnectsLeft = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private opening = false;
+  private link: MeshLink | null = null;
+  private draining = false;
+  private drainAgain = false;
 
   constructor(private readonly injected?: NativeCentral) {}
 
@@ -127,19 +159,66 @@ export class NativeBleTransport implements BleTransport {
   }
 
   /**
-   * @param remembered  Reconnect the last beacon without the device list.
+   * Report every board advertising Meshtastic. Does not connect.
+   * Call stopScan before connecting, or the phone drops the new link.
    */
-  async connect(remembered = false): Promise<void> {
+  async scan(onPeer: (peer: BlePeer) => void): Promise<void> {
+    const central = this.injected ?? (await loadCapacitorBle());
+    this.central = central;
+    await prepareCentral(central);
+    await central.setDisplayStrings?.(DISPLAY);
+    await central.stopLEScan?.().catch(() => undefined);
+    if (!central.requestLEScan) {
+      const device = await central.requestDevice({
+        services: [LIVE_SERVICE_UUID],
+        namePrefix: BLE_NAME_PREFIX,
+        displayMode: "list",
+      });
+      onPeer({ deviceId: device.deviceId, name: device.name || BLE_NAME_PREFIX });
+      return;
+    }
+    await central.requestLEScan(
+      {
+        services: [LIVE_SERVICE_UUID],
+        // Keep listening. The first packet often has no name, and iOS will not
+        // deliver another if duplicates are suppressed.
+        allowDuplicates: true,
+      },
+      (result) => {
+        const name = boardName(result);
+        if (!isMeshPeer(result)) return;
+        onPeer({ deviceId: result.device.deviceId, name });
+      },
+    );
+    // A Meshtastic board stops advertising while anything is connected to it, for example
+    // the Meshtastic app in the background. List the ones this phone already holds too.
+    try {
+      const connected = (await central.getConnectedDevices?.([LIVE_SERVICE_UUID])) ?? [];
+      for (const device of connected) {
+        onPeer({ deviceId: device.deviceId, name: device.name || BLE_NAME_PREFIX });
+      }
+    } catch {
+      /* Not offered on this platform. The scan still runs. */
+    }
+  }
+
+  async stopScan(): Promise<void> {
+    await this.central?.stopLEScan?.().catch(() => undefined);
+  }
+
+  async connect(remembered = false, peer?: BlePeer): Promise<void> {
     this.wantLink = true;
     const central = this.injected ?? (await loadCapacitorBle());
     this.central = central;
     try {
-      await central.initialize({ androidNeverForLocation: true });
-      if (!(await central.isEnabled())) {
-        throw new Error("Bluetooth is off. Turn it on, then connect again.");
-      }
+      await prepareCentral(central);
       await central.setDisplayStrings?.(DISPLAY);
-      const device = remembered ? await this.savedDevice(central) : await this.pickDevice(central);
+      await this.stopScan();
+      const device = peer
+        ? { deviceId: peer.deviceId, name: peer.name }
+        : remembered
+          ? await this.savedDevice(central)
+          : await this.pickDevice(central);
       await this.open(central, device);
     } catch (error) {
       this.wantLink = false;
@@ -151,6 +230,7 @@ export class NativeBleTransport implements BleTransport {
     this.wantLink = false;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+    this.pendingCheckIns.clear();
     const central = this.central;
     const deviceId = this.deviceId;
     this.writeTarget = null;
@@ -165,29 +245,58 @@ export class NativeBleTransport implements BleTransport {
     this.emit({ type: "disconnected", unexpected: false });
   }
 
-  async writeCommand(command: AppCommand): Promise<void> {
+  async sendCheckIn(targetId: number): Promise<void> {
     const central = this.central;
     const deviceId = this.deviceId;
-    const target = this.writeTarget;
-    if (!central || !deviceId || !target) {
+    if (!central || !deviceId || !this.writeTarget) {
       throw new Error("The beacon is not ready for commands yet.");
     }
-    const payload = encodeCommand(command);
-    const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-    if (target.withoutResponse) {
-      await central.writeWithoutResponse(deviceId, LIVE_SERVICE_UUID, target.uuid, view);
-      return;
-    }
-    await central.write(deviceId, LIVE_SERVICE_UUID, target.uuid, view);
+    if (!this.link) throw new Error("The beacon is not ready for commands yet.");
+    await this.link.sendCheckIn(targetId);
   }
 
   private async pickDevice(central: NativeCentral): Promise<NativeDevice> {
-    // This sketch calls getAdvertising()->start() without addServiceUUID, so
-    // the packet only carries the name from BLEDevice::init("Leader_Device_LoRa").
+    // Scan for a named Meshtastic board when the native scanner is available.
+    if (central.requestLEScan && central.stopLEScan) {
+      return this.scanForLeader(central);
+    }
     return central.requestDevice({
+      services: [LIVE_SERVICE_UUID],
       namePrefix: BLE_NAME_PREFIX,
-      optionalServices: [LIVE_SERVICE_UUID],
       displayMode: "list",
+    });
+  }
+
+  private scanForLeader(central: NativeCentral): Promise<NativeDevice> {
+    const scan = central.requestLEScan?.bind(central);
+    const stop = central.stopLEScan?.bind(central);
+    if (!scan || !stop) {
+      return Promise.reject(new Error(`No ${BLE_NAME_PREFIX} in range. Is the ESP32 advertising?`));
+    }
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (device?: NativeDevice, error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        void stop().catch(() => undefined);
+        if (device) resolve(device);
+        else reject(error ?? new Error(`No ${BLE_NAME_PREFIX} in range. Is the ESP32 advertising?`));
+      };
+      const timer = setTimeout(() => {
+        finish(undefined, new Error(`No ${BLE_NAME_PREFIX} in range. Is the ESP32 advertising?`));
+      }, 12000);
+      void scan(
+        {
+          services: [LIVE_SERVICE_UUID],
+          allowDuplicates: true,
+        },
+        (result) => {
+          const name = boardName(result);
+          if (!isMeshPeer(result)) return;
+          finish({ deviceId: result.device.deviceId, name });
+        },
+      ).catch((error: unknown) => finish(undefined, explainBleError(error)));
     });
   }
 
@@ -209,9 +318,7 @@ export class NativeBleTransport implements BleTransport {
     this.deviceId = device.deviceId;
     this.deviceName = device.name || readStorage(DEVICE_NAME_KEY) || BLE_NAME_PREFIX;
     try {
-      // The sketch notifies a counter as soon as the link is up. Waiting on
-      // descriptor discovery then hits the plugin's 10s "Connection timeout".
-      // Notifications do not need that discovery.
+      // Meshtastic notifications work without waiting for descriptor discovery.
       if (!this.injected) {
         await new Promise((resolve) => setTimeout(resolve, 400));
       }
@@ -226,46 +333,37 @@ export class NativeBleTransport implements BleTransport {
           `The phone is connected, but the beacon does not expose ${LIVE_SERVICE_UUID}.`,
         );
       }
-      const tx = service.characteristics.find((item) => sameUuid(item.uuid, LIVE_TX_UUID));
-      if (!tx) {
-        throw new Error(
-          `${BLE_NAME_PREFIX} is missing the notify characteristic ${LIVE_TX_UUID}.`,
-        );
+      const fromNum = service.characteristics.find((item) => sameUuid(item.uuid, LIVE_TX_UUID));
+      if (!fromNum) {
+        throw new Error(`${BLE_NAME_PREFIX} is missing the FromNum characteristic ${LIVE_TX_UUID}.`);
       }
-      const rx = service.characteristics.find((item) => sameUuid(item.uuid, LIVE_RX_UUID));
-      if (!rx) {
-        throw new Error(
-          `${BLE_NAME_PREFIX} is missing the write characteristic ${LIVE_RX_UUID}.`,
-        );
+      const toRadio = service.characteristics.find((item) => sameUuid(item.uuid, LIVE_RX_UUID));
+      if (!toRadio) {
+        throw new Error(`${BLE_NAME_PREFIX} is missing the ToRadio characteristic ${LIVE_RX_UUID}.`);
       }
-      this.writeTarget = {
-        uuid: LIVE_RX_UUID,
-        withoutResponse: rx.properties.writeWithoutResponse && !rx.properties.write,
-      };
+      const fromRadio = service.characteristics.find((item) => sameUuid(item.uuid, FROM_RADIO_UUID));
+      if (!fromRadio) {
+        throw new Error(`${BLE_NAME_PREFIX} is missing the FromRadio characteristic ${FROM_RADIO_UUID}.`);
+      }
+      this.writeTarget = { uuid: LIVE_RX_UUID, withoutResponse: false };
+      this.link = new MeshLink(
+        (bytes) => this.writeMesh(central, device.deviceId, bytes),
+        (event) => this.emit(event),
+        this.pendingCheckIns,
+      );
 
       await this.subscribeChar(central, device.deviceId, LIVE_TX_UUID);
-      await this.subscribeIfPresent(central, device.deviceId, service, LEADER_STATUS_UUID);
-      await this.subscribeIfPresent(central, device.deviceId, service, FOLLOWER_STATUS_UUID);
-      await this.subscribeIfPresent(central, device.deviceId, service, ALERT_UUID);
-
-      writeStorage(DEVICE_ID_KEY, device.deviceId);
-      writeStorage(DEVICE_NAME_KEY, this.deviceName);
+      if (this.remembers) {
+        writeStorage(DEVICE_ID_KEY, device.deviceId);
+        writeStorage(DEVICE_NAME_KEY, this.deviceName);
+      }
       this.reconnectsLeft = RECONNECT_ATTEMPTS;
       this.emit({ type: "connected", deviceName: this.deviceName });
+      await this.link.configure();
+      await this.drain(central, device.deviceId);
     } finally {
       this.opening = false;
     }
-  }
-
-  private async subscribeIfPresent(
-    central: NativeCentral,
-    deviceId: string,
-    service: GattService,
-    uuid: string,
-  ): Promise<void> {
-    const found = service.characteristics.find((item) => sameUuid(item.uuid, uuid));
-    if (!found || (!found.properties.notify && !found.properties.indicate)) return;
-    await this.subscribeChar(central, deviceId, uuid);
   }
 
   private async subscribeChar(
@@ -273,17 +371,44 @@ export class NativeBleTransport implements BleTransport {
     deviceId: string,
     characteristic: string,
   ): Promise<void> {
-    await central.startNotifications(deviceId, LIVE_SERVICE_UUID, characteristic, (value) => {
-      this.onBytes(viewToBytes(value));
+    await central.startNotifications(deviceId, LIVE_SERVICE_UUID, characteristic, () => {
+      const current = this.central;
+      const id = this.deviceId;
+      if (!current || !id) return;
+      void this.drain(current, id);
     });
   }
 
-  private onBytes(bytes: Uint8Array): void {
+  private async writeMesh(central: NativeCentral, deviceId: string, bytes: Uint8Array): Promise<void> {
+    const copy = new Uint8Array(bytes);
+    await central.write(deviceId, LIVE_SERVICE_UUID, LIVE_RX_UUID, new DataView(copy.buffer));
+  }
+
+  /** FromNum only says the queue moved. Each read is one FromRadio protobuf. */
+  private async drain(central: NativeCentral, deviceId: string): Promise<void> {
+    const link = this.link;
+    if (!link || !this.wantLink) return;
+    if (this.draining) {
+      this.drainAgain = true;
+      return;
+    }
+    this.draining = true;
     try {
-      for (const event of eventsFromNotify(bytes)) this.emit(event);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Bad packet from the beacon.";
-      this.emit({ type: "error", message });
+      do {
+        this.drainAgain = false;
+        while (this.wantLink && this.link === link) {
+          let bytes: Uint8Array;
+          try {
+            bytes = viewToBytes(await central.read(deviceId, LIVE_SERVICE_UUID, FROM_RADIO_UUID));
+          } catch {
+            break;
+          }
+          if (bytes.length === 0 || !this.wantLink || this.link !== link) break;
+          link.push(bytes);
+        }
+      } while (this.drainAgain && this.wantLink && this.link === link);
+    } finally {
+      this.draining = false;
     }
   }
 
@@ -312,6 +437,26 @@ export class NativeBleTransport implements BleTransport {
   private emit(event: BleEvent): void {
     for (const listener of this.listeners) listener(event);
   }
+}
+
+async function prepareCentral(central: NativeCentral): Promise<void> {
+  if (!preparedCentrals.has(central)) {
+    await central.initialize({ androidNeverForLocation: true });
+    preparedCentrals.add(central);
+  }
+  if (!(await central.isEnabled())) {
+    throw new Error("Bluetooth is off. Turn it on, then look again.");
+  }
+}
+
+function boardName(result: NativeScanResult): string {
+  return result.localName || result.device.name || BLE_NAME_PREFIX;
+}
+
+function isMeshPeer(result: NativeScanResult): boolean {
+  const name = `${result.localName ?? ""} ${result.device.name ?? ""}`.toLowerCase();
+  if (name.includes(BLE_NAME_PREFIX.toLowerCase())) return true;
+  return (result.uuids ?? []).some((uuid) => sameUuid(uuid, LIVE_SERVICE_UUID));
 }
 
 async function loadCapacitorBle(): Promise<NativeCentral> {

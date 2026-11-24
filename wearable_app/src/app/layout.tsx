@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Excursion",
-  description: "LoRa check-in and UWB distance for the leader phone.",
+  description: "Check in from the leader phone. The follower answers OK or needs help.",
   applicationName: "Excursion",
   appleWebApp: {
     capable: true,

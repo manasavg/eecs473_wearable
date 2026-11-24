@@ -6,7 +6,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "Excursion",
     short_name: "Excursion",
-    description: "LoRa check-in and UWB distance for the leader phone.",
+    description: "Check in from the leader phone. The follower answers OK or needs help.",
     start_url: "/",
     display: "standalone",
     background_color: "#ffffff",

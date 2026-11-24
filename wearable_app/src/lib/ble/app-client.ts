@@ -1,22 +1,7 @@
-import { BROADCAST_ID, DEFAULT_THRESHOLD_M } from "./constants";
+import { MESH_BROADCAST_ID } from "./constants";
+import { isOkText } from "../meshtastic/link";
 import { createTransport, type LinkMode } from "./create-transport";
-import { isFollowerOkSignal } from "./live-link";
-import { clampThreshold } from "./protocol";
-import type { BleEvent, BleTransport } from "./transport";
-import { CmdType, Status, type FollowerInfo, type LabSample } from "./types";
-
-/**
- * Phone side of Appendix C `class App`.
- *
- *   connect_device()   → connectDevice()
- *   parse_data()       → parseData()
- *   send_check_in(id)  → sendCheckIn()     // 0xFF = the whole group
- *   update_ui()        → subscribe()
- *   trigger_alert(id)  → triggerAlert()
- *
- * The UI renders `AppState`. It does not parse bytes and it does not
- * decide that someone is lost — the beacon does, and parseData records it.
- */
+import type { BleEvent, BlePeer, BleTransport } from "./transport";
 
 export type ConnectionState =
   | "disconnected"
@@ -25,108 +10,86 @@ export type ConnectionState =
   | "reconnecting"
   | "error";
 
-export interface MemberState {
-  deviceId: number;
-  status: Status;
-  batteryPercent: number | null;
-  distanceM: number | null;
-  angleDeg: number | null;
-  uwbOutOfRange: boolean;
-  lastDistanceM: number | null;
-  lastAngleDeg: number | null;
-  /** When the status byte became CHECKIN_PENDING. */
-  pendingSince: number | null;
-  /** When this phone sent a check-in. Drives the 60 s countdown immediately. */
-  checkInSentAt: number | null;
-  updatedAt: number;
-  lab: LabSample | null;
+export const CHECK_IN_TIMEOUT_MS = 120_000;
+
+export interface FollowerCheckIn {
+  status: "sending" | "waiting" | "received" | "ok" | "help" | "noAnswer" | "failed";
+  sentAt: number;
+  packetId: number | null;
+  reason?: string;
 }
 
-export interface ActiveAlert {
-  deviceId: number;
-  status: Status.NEED_HELP | Status.OUT_OF_RANGE;
-  at: number;
+export function isPendingCheckIn(checkIn: FollowerCheckIn | undefined, now: number): boolean {
+  return Boolean(checkIn && (
+    checkIn.status === "sending" ||
+    ((checkIn.status === "waiting" || checkIn.status === "received") && now - checkIn.sentAt < CHECK_IN_TIMEOUT_MS)
+  ));
 }
 
-export type ActivityKind =
-  | "linked"
-  | "checkin"
-  | "answered"
-  | "help"
-  | "separated"
-  | "returned"
-  | "threshold"
-  | "cleared"
-  | "error";
-
-export interface ActivityEntry {
-  id: string;
-  at: number;
-  kind: ActivityKind;
-  deviceId?: number;
-  meters?: number;
-  message?: string;
-}
-
-/** What the flashed ESP32 sketch is sending right now. */
-export interface LiveLink {
-  counter: number | null;
-  text: string | null;
-  packetCount: number;
-  lastHex: string;
+export interface TrackedFollower {
+  name?: string | undefined;
+  id: number;
+  fix: boolean | null;
+  lat: number | null;
+  lon: number | null;
 }
 
 export interface AppState {
+  checkIns: Record<number, FollowerCheckIn>;
   mode: "idle" | LinkMode;
   connection: ConnectionState;
   error: string | null;
   deviceName: string | null;
-  leaderBatteryPercent: number | null;
-  thresholdMeters: number;
-  members: MemberState[];
-  alerts: ActiveAlert[];
-  activity: ActivityEntry[];
-  lastPacketAt: number | null;
-  liveLink: LiveLink | null;
   /** When the check-in write reached the leader. The app is waiting for a follower OK. */
   groupCheckInAt: number | null;
-  /** When the leader notified that a follower pressed OK. No wearable id. */
-  groupOkAt: number | null;
-  /** Latest filtered UWB range between the leader anchor and the follower tag. */
-  uwbDistanceM: number | null;
+  gpsFix: boolean | null;
+  gpsLat: number | null;
+  gpsLon: number | null;
+  /** The other boards. Empty until the leader hears one. */
+  followers: TrackedFollower[];
 }
 
-export function createInitialState(thresholdMeters = DEFAULT_THRESHOLD_M): AppState {
+export function createInitialState(): AppState {
   return {
+    checkIns: {},
     mode: "idle",
     connection: "disconnected",
     error: null,
     deviceName: null,
-    leaderBatteryPercent: null,
-    thresholdMeters: clampThreshold(thresholdMeters),
-    members: [],
-    alerts: [],
-    activity: [],
-    lastPacketAt: null,
-    liveLink: null,
     groupCheckInAt: null,
-    groupOkAt: null,
-    uwbDistanceM: null,
+    gpsFix: null,
+    gpsLat: null,
+    gpsLon: null,
+    followers: [],
   };
 }
 
+function upsertTracked(
+  followers: TrackedFollower[],
+  id: number,
+  patch: Partial<Omit<TrackedFollower, "id">>,
+): TrackedFollower[] {
+  const previous = followers.find((follower) => follower.id === id);
+  const next: TrackedFollower = {
+    id,
+    ...(patch.name ?? previous?.name ? { name: patch.name ?? previous?.name } : {}),
+    fix: patch.fix !== undefined ? patch.fix : (previous?.fix ?? null),
+    lat: patch.lat !== undefined ? patch.lat : (previous?.lat ?? null),
+    lon: patch.lon !== undefined ? patch.lon : (previous?.lon ?? null),
+  };
+  return [...followers.filter((follower) => follower.id !== id), next].sort((a, b) => a.id - b.id);
+}
+
 export class ExcursionAppClient {
-  private state: AppState;
+  private state = createInitialState();
   private transport: BleTransport | null = null;
+  private scanLink: BleTransport | null = null;
+  private scanStop: (() => void) | null = null;
+  private scanGeneration = 0;
   private unsubscribe: (() => void) | null = null;
   private listeners = new Set<(state: AppState) => void>();
   private closing = false;
 
-  constructor(initial?: { thresholdMeters?: number }) {
-    this.state = createInitialState(initial?.thresholdMeters);
-  }
-
-  /** Appendix C: update_ui — the dashboard subscribes instead of polling. */
   subscribe(listener: (state: AppState) => void): () => void {
     this.listeners.add(listener);
     listener(this.state);
@@ -138,11 +101,57 @@ export class ExcursionAppClient {
   }
 
   /**
-   * Appendix C: connect_device.
+   * Look for Excursion boards. The callback fires as each one advertises.
+   * Resolves after about 10 seconds, or sooner when connectDevice runs.
+   */
+  async scanForDevices(onPeer: (peer: BlePeer) => void): Promise<void> {
+    await this.stopDeviceScan();
+    const generation = ++this.scanGeneration;
+    const link = createTransport("beacon");
+    this.scanLink = link;
+    if (!link.scan) {
+      this.scanLink = null;
+      return;
+    }
+    try {
+      await link.scan(onPeer);
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 10000);
+        this.scanStop = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+    } finally {
+      if (this.scanGeneration === generation) {
+        this.scanStop = null;
+        this.scanLink = null;
+        await link.stopScan?.();
+      }
+    }
+  }
+
+  async stopDeviceScan(): Promise<void> {
+    this.scanGeneration += 1;
+    const stop = this.scanStop;
+    this.scanStop = null;
+    stop?.();
+    const link = this.scanLink;
+    this.scanLink = null;
+    await link?.stopScan?.();
+  }
+
+  /**
    * Pass a transport only from tests. The click handler must call this
    * directly so Web Bluetooth's chooser still counts as a user gesture.
    */
-  async connectDevice(mode: LinkMode, transport?: BleTransport, remembered = false): Promise<void> {
+  async connectDevice(
+    mode: LinkMode,
+    transport?: BleTransport,
+    remembered = false,
+    peer?: BlePeer,
+  ): Promise<void> {
+    await this.stopDeviceScan();
     const previous = this.transport;
     this.release();
     // Do not await here. requestDevice() has to stay inside the click gesture.
@@ -153,169 +162,160 @@ export class ExcursionAppClient {
       void this.parseData(event);
     });
     this.commit({
-      ...createInitialState(this.state.thresholdMeters),
+      ...createInitialState(),
       mode,
       connection: "scanning",
-      thresholdMeters: this.state.thresholdMeters,
     });
 
     try {
-      await link.connect(remembered);
+      await link.connect(remembered, peer);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not connect.";
       const failed = this.transport;
       this.release();
       void failed?.disconnect();
       this.commit({
-        ...createInitialState(this.state.thresholdMeters),
+        ...createInitialState(),
         connection: "error",
         error: message,
-        thresholdMeters: this.state.thresholdMeters,
       });
       throw error instanceof Error ? error : new Error(message);
     }
   }
 
   async disconnect(): Promise<void> {
+    await this.stopDeviceScan();
     if (!this.transport && this.state.mode === "idle") return;
     this.closing = true;
-    const threshold = this.state.thresholdMeters;
     try {
       await this.transport?.disconnect();
     } finally {
       this.release();
       this.closing = false;
-      this.commit(createInitialState(threshold));
+      this.commit(createInitialState());
     }
   }
 
-  /** Local slider updates. The beacon is told from `writeThreshold`. */
-  setThreshold(meters: number): void {
-    this.commit({ ...this.state, thresholdMeters: clampThreshold(meters) });
-  }
-
-  async writeThreshold(): Promise<void> {
-    if (!this.transport || this.state.connection !== "connected") return;
-    const meters = this.state.thresholdMeters;
-    try {
-      await this.transport.writeCommand({
-        type: CmdType.SET_THRESHOLD,
-        targetId: BROADCAST_ID,
-        thresholdMeters: meters,
-      });
-      this.commit(this.state, {
-        id: nextId(),
-        at: Date.now(),
-        kind: "threshold",
-        meters,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not set the separation line.";
-      this.commit({ ...this.state, error: message }, { id: nextId(), at: Date.now(), kind: "error", message });
-    }
-  }
-
-  /** Appendix C: send_check_in. The Heltec leader treats this as the whole group. */
-  async sendCheckIn(targetId: number): Promise<void> {
+  /** Send one check-in through the connected leader. */
+  async sendCheckIn(targetId: number, groupIds: number[] = [targetId]): Promise<void> {
     if (!this.transport || this.state.connection !== "connected") {
       throw new Error("Connect the beacon before sending a check-in.");
     }
+    const previous = this.state.checkIns[targetId];
+    const now = Date.now();
+    if (previous && isPendingCheckIn(previous, now)) return;
+    const attempt: FollowerCheckIn = { status: "sending", sentAt: now, packetId: null };
+    this.commit({ ...this.state, error: null });
+    for (const id of groupIds) this.updateCheckIn(id, attempt);
     try {
-      await this.transport.writeCommand({
-        type: CmdType.CHECK_IN,
-        targetId,
-        thresholdMeters: 0,
-      });
+      await this.transport.sendCheckIn(targetId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Check-in did not reach the beacon.";
-      this.commit(
-        { ...this.state, error: message },
-        { id: nextId(), at: Date.now(), kind: "error", message },
-      );
+      for (const id of groupIds) {
+        if (this.state.checkIns[id] === attempt || this.state.checkIns[id]?.status === "waiting") {
+          this.updateCheckIn(id, { ...attempt, status: "failed", reason: message });
+        }
+      }
+      this.commit({ ...this.state, error: message });
       throw error instanceof Error ? error : new Error(message);
     }
-    const now = Date.now();
-    this.commit(
-      { ...this.state, groupCheckInAt: now, groupOkAt: null, error: null },
-      { id: nextId(), at: now, kind: "checkin" },
-    );
+    if (targetId === MESH_BROADCAST_ID) {
+      for (const id of groupIds) {
+        if (this.state.checkIns[id] === attempt) {
+          this.updateCheckIn(id, { ...attempt, status: "waiting" });
+        }
+      }
+    }
+    this.commit({ ...this.state, groupCheckInAt: now });
   }
 
-  /** Appendix C: parse_data. One BLE notification in, one state update out. */
+  private updateCheckIn(id: number, checkIn: FollowerCheckIn): void {
+    this.commit({ ...this.state, checkIns: { ...this.state.checkIns, [id]: checkIn } });
+  }
+
   async parseData(event: BleEvent): Promise<void> {
     switch (event.type) {
       case "connected":
-        this.commit(
-          {
-            ...this.state,
-            connection: "connected",
-            error: null,
-            deviceName: event.deviceName,
-          },
-          {
-            id: nextId(),
-            at: Date.now(),
-            kind: "linked",
-            message: event.deviceName,
-          },
-        );
+        this.commit({ ...this.state, connection: "connected", error: null, deviceName: event.deviceName });
         return;
       case "disconnected":
         if (this.closing || !event.unexpected) return;
         this.commit({
           ...this.state,
           connection: "disconnected",
-          error: "The beacon link dropped. The last distances are still on screen.",
+          error: "The beacon link dropped.",
         });
         return;
       case "reconnecting":
         this.commit({ ...this.state, connection: "reconnecting", error: null });
         return;
       case "error":
-        this.commit(
-          { ...this.state, error: event.message },
-          { id: nextId(), at: Date.now(), kind: "error", message: event.message },
-        );
+        this.commit({ ...this.state, error: event.message });
         return;
-      case "leader":
+      case "node-seen":
         this.commit({
           ...this.state,
-          leaderBatteryPercent: event.batteryPercent,
-          lastPacketAt: Date.now(),
+          followers: upsertTracked(this.state.followers, event.id, { name: event.name }),
         });
         return;
-      case "follower":
-        this.upsertFollower(event.info, event.lab ?? null);
+      case "checkin-sent": {
+        const checkIn = this.state.checkIns[event.id];
+        if (checkIn?.status === "sending") {
+          this.updateCheckIn(event.id, { ...checkIn, status: "waiting", packetId: event.packetId });
+        }
         return;
-      case "alert":
-        this.triggerAlert(event.deviceId, event.status);
+      }
+      case "checkin-ack":
+      case "checkin-failed": {
+        const checkIn = this.state.checkIns[event.id];
+        if (checkIn?.packetId !== event.packetId || checkIn.status !== "waiting") return;
+        this.updateCheckIn(event.id, event.type === "checkin-ack"
+          ? { ...checkIn, status: "received" }
+          : { ...checkIn, status: event.noAnswer ? "noAnswer" : "failed", reason: event.reason });
         return;
-      case "roster-cleared":
-        this.commit(
-          { ...this.state, members: [], alerts: [] },
-          { id: nextId(), at: Date.now(), kind: "cleared" },
-        );
-        return;
+      }
       case "live": {
         const now = Date.now();
-        const followerOk = isFollowerOkSignal(event.text);
-        const distance =
-          event.distanceM != null && Number.isFinite(event.distanceM) ? event.distanceM : null;
-        this.commit(
-          {
-            ...this.state,
-            lastPacketAt: now,
-            groupOkAt: followerOk ? now : this.state.groupOkAt,
-            uwbDistanceM: distance ?? this.state.uwbDistanceM,
-            liveLink: {
-              counter: event.counter ?? this.state.liveLink?.counter ?? null,
-              text: event.text ?? this.state.liveLink?.text ?? null,
-              packetCount: (this.state.liveLink?.packetCount ?? 0) + 1,
-              lastHex: event.hex,
+        const sender = event.fromId;
+        const followerOk = event.text != null && isOkText(event.text);
+        const text = event.text?.trim().toUpperCase();
+        const followerHelp = text === "HELP" || text === "NEED HELP" || text === "NEEDS HELP" ||
+          text?.startsWith("NEEDS HELP ");
+        const checkIn = sender == null ? undefined : this.state.checkIns[sender];
+        if (sender != null && (followerOk || (followerHelp && (checkIn || this.state.groupCheckInAt != null)))) {
+          this.updateCheckIn(sender, {
+            sentAt: checkIn?.sentAt ?? this.state.groupCheckInAt ?? now,
+            packetId: checkIn?.packetId ?? null,
+            status: followerHelp ? "help" : "ok",
+          });
+        }
+        const gps = event.gps;
+        let followers = this.state.followers;
+        if (sender != null && this.state.checkIns[sender] && (followerOk || followerHelp)) {
+          followers = upsertTracked(followers, sender, {});
+        }
+        if (event.followerGoneId != null) {
+          followers = followers.filter((follower) => follower.id !== event.followerGoneId);
+        }
+        if (event.followerGps) {
+          followers = upsertTracked(
+            followers,
+            event.followerGps.id,
+            {
+              name: event.followerGps.name ?? undefined,
+              fix: event.followerGps.fix,
+              lat: event.followerGps.lat,
+              lon: event.followerGps.lon,
             },
-          },
-          followerOk ? { id: nextId(), at: now, kind: "answered" } : undefined,
-        );
+          );
+        }
+        this.commit({
+          ...this.state,
+          followers,
+          gpsFix: gps ? gps.fix : this.state.gpsFix,
+          gpsLat: gps ? gps.lat : this.state.gpsLat,
+          gpsLon: gps ? gps.lon : this.state.gpsLon,
+        });
         return;
       }
       default:
@@ -323,95 +323,9 @@ export class ExcursionAppClient {
     }
   }
 
-  /**
-   * Appendix C: trigger_alert.
-   * Called for the alert characteristic and when a follower status first
-   * enters Need Help or Out of range. A repeat of the same alert is ignored
-   * so a 2 s refresh does not re-page the leader.
-   */
-  triggerAlert(deviceId: number, status: Status): void {
-    if (status !== Status.NEED_HELP && status !== Status.OUT_OF_RANGE) return;
-    const existing = this.state.alerts.find((alert) => alert.deviceId === deviceId);
-    if (existing?.status === status) return;
-    const at = Date.now();
-    const alerts: ActiveAlert[] = [
-      ...this.state.alerts.filter((alert) => alert.deviceId !== deviceId),
-      { deviceId, status, at },
-    ];
-    this.commit(
-      { ...this.state, alerts },
-      {
-        id: nextId(),
-        at,
-        kind: status === Status.NEED_HELP ? "help" : "separated",
-        deviceId,
-      },
-    );
-  }
-
   dismissError(): void {
     if (!this.state.error) return;
     this.commit({ ...this.state, error: null });
-  }
-
-  private upsertFollower(info: FollowerInfo, lab: LabSample | null): void {
-    const now = Date.now();
-    const previous = this.state.members.find((member) => member.deviceId === info.deviceId);
-    const pendingSince =
-      info.status === Status.CHECKIN_PENDING
-        ? (previous?.pendingSince ?? previous?.checkInSentAt ?? now)
-        : null;
-
-    // A periodic OK refresh must not wipe a check-in this phone just sent.
-    // Clear it only when the beacon actually leaves an alarm or a pending check-in.
-    let checkInSentAt = previous?.checkInSentAt ?? null;
-    if (info.status === Status.CHECKIN_PENDING) {
-      checkInSentAt = previous?.checkInSentAt ?? now;
-    } else if (info.status === Status.OK && previous && previous.status !== Status.OK) {
-      checkInSentAt = null;
-    }
-
-    const next: MemberState = {
-      deviceId: info.deviceId,
-      status: info.status,
-      batteryPercent: info.batteryPercent,
-      distanceM: info.distanceM,
-      angleDeg: info.angleDeg,
-      uwbOutOfRange: info.uwbOutOfRange,
-      lastDistanceM: info.distanceM ?? previous?.lastDistanceM ?? null,
-      lastAngleDeg: info.angleDeg ?? previous?.lastAngleDeg ?? null,
-      pendingSince,
-      checkInSentAt,
-      updatedAt: now,
-      lab,
-    };
-
-    let alerts = this.state.alerts;
-    let activity: ActivityEntry | undefined;
-
-    if (info.status === Status.OK && previous && previous.status !== Status.OK) {
-      alerts = alerts.filter((alert) => alert.deviceId !== info.deviceId);
-      if (
-        previous.status === Status.CHECKIN_PENDING ||
-        previous.status === Status.NEED_HELP ||
-        previous.checkInSentAt
-      ) {
-        activity = { id: nextId(), at: now, kind: "answered", deviceId: info.deviceId };
-      } else if (previous.status === Status.OUT_OF_RANGE) {
-        activity = { id: nextId(), at: now, kind: "returned", deviceId: info.deviceId };
-      }
-    }
-
-    const members = [
-      ...this.state.members.filter((member) => member.deviceId !== info.deviceId),
-      next,
-    ].sort((a, b) => a.deviceId - b.deviceId);
-
-    this.commit({ ...this.state, members, alerts, lastPacketAt: now }, activity);
-
-    if (info.status === Status.NEED_HELP || info.status === Status.OUT_OF_RANGE) {
-      this.triggerAlert(info.deviceId, info.status);
-    }
   }
 
   private release(): void {
@@ -420,15 +334,8 @@ export class ExcursionAppClient {
     this.transport = null;
   }
 
-  private commit(next: AppState, activity?: ActivityEntry): void {
-    this.state = activity
-      ? { ...next, activity: [activity, ...next.activity].slice(0, 24) }
-      : next;
+  private commit(next: AppState): void {
+    this.state = next;
     for (const listener of this.listeners) listener(this.state);
   }
-}
-
-function nextId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }

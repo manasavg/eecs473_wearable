@@ -7,14 +7,17 @@
     "build": "next build --turbopack",
     "start": "next start -p 4317",
     "lint": "eslint",
-    "build:ios": "CAPACITOR=1 next build",
+    "build:ios": "node scripts/ios-build.mjs",
     "postinstall": "node scripts/patch-ble-ios.mjs",
-    "cap:sync": "npm run build:ios && node scripts/patch-ble-ios.mjs && npx cap sync ios",
-    "test": "node --import tsx --test src/lib/ble/protocol.test.ts src/lib/ble/live-link.test.ts src/lib/ble/app-client.test.ts src/lib/ble/native-transport.test.ts"
+    "cap:sync": "npm run build:ios && node scripts/patch-ble-ios.mjs && node scripts/cap-copy.mjs",
+    "test": "node --import tsx --test src/lib/geo.test.ts src/lib/ble/app-client.test.ts src/lib/ble/native-transport.test.ts src/lib/meshtastic/link.test.ts"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "^2.17.0",
     "@capacitor-community/bluetooth-le": "8.3.0",
     "@capacitor/core": "^8.5.2",
+    "@meshtastic/core": "^2.6.7",
+    "@meshtastic/protobufs": "^2.8.0",
     "next": "15.5.27",
     "react": "19.1.0",
     "react-dom": "19.1.0"

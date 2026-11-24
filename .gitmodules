@@ -1,3 +1,6 @@
-[submodule "firmware/"]
-    path = "firmware/"
-    url = "https://github.com/lucahard67/firmware.git"
+[submodule "firmware/protobufs"]
+	path = firmware/protobufs
+	url = https://github.com/meshtastic/protobufs.git
+[submodule "firmware/meshtestic"]
+	path = firmware/meshtestic
+	url = https://github.com/meshtastic/meshTestic

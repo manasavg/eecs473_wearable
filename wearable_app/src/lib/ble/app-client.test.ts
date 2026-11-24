@@ -2,11 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ExcursionAppClient } from "./app-client.ts";
 import type { BleEvent, BleTransport } from "./transport.ts";
-import { BROADCAST_ID } from "./constants.ts";
-import { CmdType, Status, type AppCommand, type FollowerInfo } from "./types.ts";
+import { MESH_BROADCAST_ID } from "./constants.ts";
 
 class ScriptedTransport implements BleTransport {
-  readonly commands: AppCommand[] = [];
+  readonly targets: number[] = [];
   private listener: ((event: BleEvent) => void) | null = null;
 
   async connect(): Promise<void> {
@@ -19,9 +18,9 @@ class ScriptedTransport implements BleTransport {
 
   failWrite = false;
 
-  async writeCommand(command: AppCommand): Promise<void> {
+  async sendCheckIn(targetId: number): Promise<void> {
     if (this.failWrite) throw new Error("Check-in did not reach the beacon.");
-    this.commands.push(command);
+    this.targets.push(targetId);
   }
 
   subscribe(listener: (event: BleEvent) => void): () => void {
@@ -36,151 +35,80 @@ class ScriptedTransport implements BleTransport {
   }
 }
 
-function follower(overrides: Partial<FollowerInfo> = {}): FollowerInfo {
-  return {
-    deviceId: 1,
-    status: Status.OK,
-    batteryPercent: 90,
-    distanceM: 14,
-    angleDeg: -20,
-    uwbOutOfRange: false,
-    ...overrides,
-  };
-}
-
 describe("ExcursionAppClient", () => {
-  it("connects without writing, so the LoRa board does not send CHECK IN", async () => {
+  it("connects without sending a check-in", async () => {
     const transport = new ScriptedTransport();
-    const client = new ExcursionAppClient({ thresholdMeters: 25 });
+    const client = new ExcursionAppClient();
     await client.connectDevice("beacon", transport);
     assert.equal(client.getState().connection, "connected");
-    assert.equal(client.getState().deviceName, "Test beacon");
-    assert.equal(transport.commands.length, 0);
+    assert.deepEqual(transport.targets, []);
     await client.disconnect();
   });
 
-  it("check-in writes CHECK_IN and stamps every wristband for the group", async () => {
-    const transport = new ScriptedTransport();
-    const client = new ExcursionAppClient();
-    await client.connectDevice("beacon", transport);
-    transport.emit({ type: "follower", info: follower({ deviceId: 1 }) });
-    transport.emit({ type: "follower", info: follower({ deviceId: 2, angleDeg: 15 }) });
-    await client.sendCheckIn(BROADCAST_ID);
-    const command = transport.commands.at(-1);
-    assert.equal(command?.type, CmdType.CHECK_IN);
-    assert.equal(command?.targetId, BROADCAST_ID);
-    assert.ok(client.getState().groupCheckInAt);
-    assert.equal(client.getState().groupOkAt, null);
-    assert.ok(client.getState().members.every((member) => member.status === Status.OK));
-    await client.disconnect();
-  });
-
-  it("shows the group OK only after the leader notifies OK", async () => {
-    const transport = new ScriptedTransport();
-    const client = new ExcursionAppClient();
-    await client.connectDevice("beacon", transport);
-    await client.sendCheckIn(BROADCAST_ID);
-    assert.equal(client.getState().members.length, 0);
-    assert.equal(client.getState().groupOkAt, null);
-    assert.equal(client.getState().activity[0]?.kind, "checkin");
-    transport.emit({ type: "live", counter: 4, text: null, hex: "04" });
-    assert.equal(client.getState().groupOkAt, null);
-    transport.emit({ type: "live", counter: null, text: "OK", hex: "4f 4b" });
-    assert.ok(client.getState().groupOkAt);
-    assert.equal(client.getState().activity[0]?.kind, "answered");
-    await client.disconnect();
-  });
-
-  it("does not mark the group OK when the write fails", async () => {
+  it("marks each broadcast recipient failed when the write fails", async () => {
     const transport = new ScriptedTransport();
     transport.failWrite = true;
     const client = new ExcursionAppClient();
     await client.connectDevice("beacon", transport);
-    await assert.rejects(() => client.sendCheckIn(BROADCAST_ID), /did not reach/);
-    assert.equal(client.getState().groupOkAt, null);
+    await assert.rejects(() => client.sendCheckIn(MESH_BROADCAST_ID, [0xa3, 0xb4]), /did not reach/);
+    assert.equal(client.getState().checkIns[0xa3].status, "failed");
+    assert.equal(client.getState().checkIns[0xb4].status, "failed");
     await client.disconnect();
   });
 
-  it("shows the UWB distance and keeps it when the counter ticks", async () => {
-    const transport = new ScriptedTransport();
+  it("refuses a check-in before connecting", async () => {
     const client = new ExcursionAppClient();
-    await client.connectDevice("beacon", transport);
-    assert.equal(client.getState().uwbDistanceM, null);
-    transport.emit({ type: "live", counter: null, text: null, hex: "44 d2 04", distanceM: 12.34 });
-    assert.equal(client.getState().uwbDistanceM, 12.34);
-    transport.emit({ type: "live", counter: 3, text: null, hex: "03" });
-    assert.equal(client.getState().uwbDistanceM, 12.34);
-    transport.emit({ type: "live", counter: null, text: "OK", hex: "4f 4b" });
-    assert.equal(client.getState().uwbDistanceM, 12.34);
-    assert.ok(client.getState().groupOkAt);
-    await client.disconnect();
+    await assert.rejects(() => client.sendCheckIn(0xa3), /Connect the beacon/);
   });
+});
 
-  it("shows the ESP32 counter without inventing a wristband", async () => {
-    const transport = new ScriptedTransport();
-    const client = new ExcursionAppClient();
-    await client.connectDevice("beacon", transport);
-    transport.emit({
-      type: "live",
-      counter: null,
-      text: "Data successfully transmitted",
-      hex: "44 61 74 61",
-    });
-    transport.emit({ type: "live", counter: 7, text: null, hex: "07 00 00 00" });
-    const link = client.getState().liveLink;
-    assert.equal(link?.counter, 7);
-    assert.equal(link?.text, "Data successfully transmitted");
-    assert.equal(link?.packetCount, 2);
-    assert.equal(client.getState().members.length, 0);
-    transport.emit({ type: "live", counter: 8, text: null, hex: "08 00 00 00" });
-    assert.equal(client.getState().liveLink?.counter, 8);
-    assert.equal(client.getState().liveLink?.text, "Data successfully transmitted");
-    await client.disconnect();
-  });
+it("keeps delivery, OK and help independent across followers", async () => {
+  const client = new ExcursionAppClient();
+  const transport = new ScriptedTransport();
+  await client.connectDevice("beacon", transport);
+  for (const id of [0xa3, 0xb4]) {
+    await client.parseData({ type: "node-seen", id, name: `Wearable ${id}`, at: null });
+    await client.sendCheckIn(id);
+    await client.parseData({ type: "checkin-sent", id, packetId: id + 1 });
+  }
+  await client.parseData({ type: "checkin-ack", id: 0xa3, packetId: 0xb5 });
+  assert.equal(client.getState().checkIns[0xa3].status, "waiting");
+  await client.parseData({ type: "checkin-ack", id: 0xa3, packetId: 0xa4 });
+  assert.equal(client.getState().checkIns[0xa3].status, "received");
+  assert.equal(client.getState().checkIns[0xb4].status, "waiting");
+  await client.parseData({ type: "live", text: "OK", fromId: 0xa3 });
+  await client.parseData({ type: "live", text: "NEED HELP", fromId: 0xb4 });
+  assert.equal(client.getState().checkIns[0xa3].status, "ok");
+  assert.equal(client.getState().checkIns[0xb4].status, "help");
+  await client.disconnect();
+});
 
-  it("pages once when status and the alert characteristic both say Need Help", async () => {
-    const transport = new ScriptedTransport();
-    const client = new ExcursionAppClient();
-    await client.connectDevice("beacon", transport);
-    transport.emit({ type: "follower", info: follower() });
-    const help = follower({ status: Status.NEED_HELP });
-    transport.emit({ type: "follower", info: help });
-    transport.emit({
-      type: "alert",
-      deviceId: 1,
-      status: Status.NEED_HELP,
-      uwbOutOfRange: false,
-    });
-    const state = client.getState();
-    assert.equal(state.alerts.length, 1);
-    assert.equal(state.alerts[0].status, Status.NEED_HELP);
-    assert.equal(state.activity.filter((entry) => entry.kind === "help").length, 1);
-    await client.disconnect();
-  });
+it("records four independent OK replies to a group broadcast even before discovery", async () => {
+  const client = new ExcursionAppClient();
+  const transport = new ScriptedTransport();
+  await client.connectDevice("beacon", transport);
+  const followers = [0xa3, 0xb4, 0xc5, 0xd6];
+  await client.sendCheckIn(MESH_BROADCAST_ID, followers.slice(0, 1));
+  assert.deepEqual(transport.targets, [MESH_BROADCAST_ID]);
+  assert.equal(client.getState().checkIns[followers[0]].status, "waiting");
+  for (const id of followers) {
+    await client.parseData({ type: "live", text: "OK", fromId: id });
+  }
+  for (const id of followers) {
+    assert.equal(client.getState().checkIns[id].status, "ok");
+    assert.ok(client.getState().followers.some((follower) => follower.id === id));
+  }
+  await client.disconnect();
+});
 
-  it("keeps the last fix when UWB drops", async () => {
-    const transport = new ScriptedTransport();
-    const client = new ExcursionAppClient();
-    await client.connectDevice("beacon", transport);
-    transport.emit({ type: "follower", info: follower({ distanceM: 22.5, angleDeg: 40 }) });
-    transport.emit({
-      type: "follower",
-      info: follower({
-        status: Status.OUT_OF_RANGE,
-        distanceM: null,
-        angleDeg: null,
-        uwbOutOfRange: true,
-      }),
-    });
-    const member = client.getState().members[0];
-    assert.equal(member.distanceM, null);
-    assert.equal(member.lastDistanceM, 22.5);
-    assert.equal(member.lastAngleDeg, 40);
-    await client.disconnect();
-  });
-
-  it("refuses a check-in before connect", async () => {
-    const client = new ExcursionAppClient();
-    await assert.rejects(() => client.sendCheckIn(1), /Connect the beacon/);
-  });
+it("shows a plain OK from its sender without a previous check-in entry", async () => {
+  const client = new ExcursionAppClient();
+  const transport = new ScriptedTransport();
+  await client.connectDevice("beacon", transport);
+  await client.parseData({ type: "live", text: "OK", fromId: 0xa3 });
+  await client.parseData({ type: "live", text: "OK later", fromId: 0xb4 });
+  assert.equal(client.getState().checkIns[0xa3]?.status, "ok");
+  assert.ok(client.getState().followers.some((follower) => follower.id === 0xa3));
+  assert.equal(client.getState().checkIns[0xb4], undefined);
+  await client.disconnect();
 });

@@ -1,26 +1,23 @@
 # Excursion
 
-Leader phone app. Two radios, kept separate:
+Excursion connects over Bluetooth to a board running Meshtastic. That board acts as the leader. The app sends check-ins through it and shows follower replies and GPS positions when available.
 
-- **LoRa** is `firmware/leader_device/leader_device.ino` on the Heltec. The phone connects to it over Bluetooth (`Leader_Device_LoRa`). Check in writes a packet whose first byte is 1. The board sends LoRa `CHECK IN`. When a follower sends LoRa `OK`, the leader notifies the phone and the screen shows They're OK.
-- **UWB** is `firmware/uwb/anchor/anchor.ino` and `firmware/uwb/tag/tag.ino` on the DW1000 boards. They are not the Heltec. The anchor is an Arduino Uno. It sends `DIST 12.34` at 9600 from pin 9. Wire Uno pin 9 to Heltec GPIO 47 RX, and connect the grounds. In the Arduino IDE, compile both UWB sketches as Arduino Uno. Compile the Heltec sketch as the ESP32. The Heltec forwards the meters to the phone.
+The board firmware lives in the separate Meshtastic `firmware` project. Use the PlatformIO `WEARABLE` environment for the custom PCB.
 
-## Run
+## Run locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open http://127.0.0.1:4317.
+Open <http://127.0.0.1:4317> in a browser that supports Web Bluetooth.
 
-On the iPhone project that is already open: `git pull`, then `npm run cap:sync`, then Run in Xcode.
+## Run on iPhone
 
-## Flash
+Run `npm run cap:sync` to build the app and copy it into the iOS project. Open `ios/App/App.xcodeproj` in Xcode, select your iPhone, and run the app. Tap **Find devices** and select the leader board.
 
-1. Anchor: `firmware/uwb/anchor/anchor.ino`
-2. Leader: `firmware/leader_device/leader_device.ino`
-3. Tag: leave it if it already matches `firmware/uwb/tag/tag.ino`
+## Tests
 
 ```bash
 npm test

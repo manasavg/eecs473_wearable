@@ -1,5 +1,5 @@
 /**
- * Adjusts the iOS Bluetooth plugin so Leader_Device can be found and connected.
+ * Adjusts the iOS Bluetooth plugin for Meshtastic discovery and connections.
  *
  * A diff patch fails on a Mac: the plugin file uses Windows line endings, and
  * git turns the patch into Unix endings on checkout. This script edits the
@@ -26,19 +26,13 @@ let text = original.replaceAll("\r\n", "\n");
 
 const applied =
   text.includes("let servicesToScan: [CBUUID]? = serviceUUIDs.isEmpty ? nil : serviceUUIDs") &&
-  text.includes("let resolvedName = peripheral.name ?? advertisedName") &&
+  (text.includes("let resolvedName = peripheral.name ?? advertisedName") ||
+    text.includes("let resolvedName = advertisedName ?? peripheral.name")) &&
   text.includes("self.stopScan()\n        self.centralManager.connect");
 
 const nameFilter = `    private func passesNamePrefixFilter(peripheralName: String?) -> Bool {
         guard let prefix = self.deviceNamePrefixFilter else { return true }
         guard let name = peripheralName else { return false }
-        return name.hasPrefix(prefix)
-    }`;
-
-const nameFilterFixed = `    private func passesNamePrefixFilter(peripheralName: String?) -> Bool {
-        guard let prefix = self.deviceNamePrefixFilter else { return true }
-        // iOS often omits the name. Dropping those devices hides Leader_Device.
-        guard let name = peripheralName else { return true }
         return name.hasPrefix(prefix)
     }`;
 
@@ -61,8 +55,7 @@ const replacements = [
   [
     `        guard self.passesNameFilter(peripheralName: peripheral.name) else { return }
         guard self.passesNamePrefixFilter(peripheralName: peripheral.name) else { return }`,
-    `        // iOS often leaves peripheral.name nil until after bonding. The sketch
-        // puts "Leader_Device" in the advertising packet as the local name.
+    `        // Use the advertised local name when CoreBluetooth has no cached name.
         let advertisedName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
         let resolvedName = peripheral.name ?? advertisedName
 
@@ -103,12 +96,34 @@ for (const [from, to] of replacements) {
 
 }
 
-if (text.includes(nameFilter)) {
-  text = text.replace(nameFilter, nameFilterFixed);
+const nameFilterStrict = `    private func passesNamePrefixFilter(peripheralName: String?) -> Bool {
+        guard let prefix = self.deviceNamePrefixFilter else { return true }
+        // Unnamed peripherals do not match a requested name prefix.
+        guard let name = peripheralName, !name.isEmpty else { return false }
+        return name.hasPrefix(prefix)
+    }`;
+
+text = text.replace(nameFilter, nameFilterStrict);
+
+// iOS caches the name from the last connection. The packet is the current name.
+text = text.replaceAll(
+  "let resolvedName = peripheral.name ?? advertisedName",
+  "let resolvedName = advertisedName ?? peripheral.name",
+);
+
+// A board the phone already tried to connect stays "connected" in iOS after the
+// Heltec has gone back to advertising. Scan was throwing those away, so a
+// board that is on and advertising never appeared in Find devices.
+const hideConnected = `        guard peripheral.state != CBPeripheralState.connected else {
+            log("found connected device", peripheral.name ?? "Unknown")
+            // make sure we do not touch connected devices
+            return
+        }
+
+`;
+if (text.includes(hideConnected)) {
+  text = text.replace(hideConnected, "");
 }
 
-text = text.replaceAll('resolvedName ?? "Unknown"', 'resolvedName ?? "Leader_Device_LoRa"');
-text = text.replaceAll('resolvedName ?? "Leader_Device"', 'resolvedName ?? "Leader_Device_LoRa"');
-
 writeFileSync(file, newline === "\r\n" ? text.replaceAll("\n", "\r\n") : text);
-console.log("Updated the iOS Bluetooth plugin so it can find Leader_Device_LoRa.");
+console.log("Updated the iOS Bluetooth plugin for Meshtastic discovery.");
